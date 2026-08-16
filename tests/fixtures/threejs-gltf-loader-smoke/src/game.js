@@ -7,11 +7,38 @@ const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
 camera.position.z = 4;
 camera.lookAt(0, 0, 0);
 
+const featureGroup = new THREE.Group();
+const instanced = new THREE.InstancedMesh(
+  new THREE.BoxGeometry(0.35, 0.35, 0.35),
+  new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.1 }),
+  2,
+);
+const instanceMatrix = new THREE.Matrix4();
+instanceMatrix.makeTranslation(-1.2, -0.4, 0);
+instanced.setMatrixAt(0, instanceMatrix);
+instanceMatrix.makeTranslation(1.2, -0.4, 0);
+instanced.setMatrixAt(1, instanceMatrix);
+instanced.instanceMatrix.needsUpdate = true;
+const line = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-1, -1, 0),
+    new THREE.Vector3(0, -0.4, 0),
+    new THREE.Vector3(1, -1, 0),
+  ]),
+  new THREE.LineBasicMaterial({ color: 0x44ccff }),
+);
+const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66ff88 }));
+sprite.position.set(0, 1.4, 0);
+sprite.scale.setScalar(0.35);
+featureGroup.add(instanced, line, sprite);
+scene.add(featureGroup);
+
 globalThis.__gltfSmokeError = null;
 globalThis.__gltfSmokeLoaded = false;
 globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
+globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfResizeEvent = false;
 window.addEventListener("resize", () => { globalThis.__gltfResizeEvent = window.innerWidth === 960 && window.innerHeight === 540; });
 globalThis.__gltfSmokeStage = "before-adapter";
@@ -55,6 +82,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfSmokeStage = "before-render";
   await renderer.renderAsync(scene, camera);
   globalThis.__gltfSmokeRendered = device !== null && renderer.isWebGPURenderer === true;
+  globalThis.__gltfFeatureSmoke = instanced.isInstancedMesh && line.isLine && sprite.isSprite;
 }).catch((error) => {
   globalThis.__gltfSmokeError = `${globalThis.__gltfSmokeStage}: ${String(error.stack || error)}`;
 });
@@ -69,6 +97,7 @@ globalThis.HyperThreeGame = {
     if (!globalThis.__gltfExternalTexture) throw new Error("external texture smoke did not settle");
     if (!globalThis.__gltfGlbLoaded) throw new Error("GLB smoke did not settle");
     if (!globalThis.__gltfResizeEvent) throw new Error("native resize event did not settle");
+    if (!globalThis.__gltfFeatureSmoke) throw new Error("InstancedMesh/Line/Sprite smoke did not settle");
     if (!globalThis.__gltfSmokeRendered) throw new Error("GLTF WebGPU render smoke did not settle");
   },
   onStop() {},

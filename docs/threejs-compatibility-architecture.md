@@ -112,7 +112,7 @@ Three.js公式のWebGPUサンプルを次のカテゴリで実行する。
 
 1. Standard / Physical material、texture、normal、roughness、metalness
 2. GLTFLoader、AnimationMixer、skin、morph target（embedded/external/GLBとPNG textureのsmoke済み）
-3. InstancedMesh、BatchedMesh、Points、Line、Sprite
+3. InstancedMesh、BatchedMesh、Points、Line、Sprite（InstancedMesh/Line/Sprite smoke済み）
 4. TSL/NodeMaterial、compute、post-processing
 5. Shadow、environment map、multiple render target、indirect draw
 
