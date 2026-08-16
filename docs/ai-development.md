@@ -14,6 +14,8 @@ Edit only src/game.js and public/ assets.
 Use Three.js scene, camera, geometry, materials, and animation state, but do not
 use document, window, WebGLRenderer, or browser-only input APIs.
 Expose the playable state through globalThis.HyperThreeGame.
+Use HyperThreeNative.setClearColor() and setTriangleColor() for the current
+native rendering bridge.
 Keep the project buildable with npm run build.
 ```
 
@@ -28,4 +30,3 @@ Keep the project buildable with npm run build.
 This avoids making the native host understand every web bundler. The next SDK
 increment will provide native replacements for the browser APIs commonly used
 by Three.js renderers.
-

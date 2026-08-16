@@ -5,5 +5,10 @@ globalThis.HyperThreeNative = {
   renderer: "wgpu-native",
   zeroCopyAssets: true,
   gpuDrivenCulling: false,
+  setClearColor(r, g, b, a = 1) {
+    __hyperthreeSetClearColor(r, g, b, a);
+  },
+  setTriangleColor(index, r, g, b) {
+    __hyperthreeSetTriangleColor(index, r, g, b);
+  },
 };
-

@@ -48,11 +48,14 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 - `src/js_runtime.rs`: ブラウザ非依存 JavaScript 実行境界
 - `src/renderer.rs`: wgpu のネイティブサーフェスと描画パイプライン
 - `src/asset.rs`: mmap ベースのアセット読み込み
+- `src/bridge.rs`: JavaScriptからネイティブ描画状態へ渡す共有ブリッジ
 - `src/project.rs`: `hyperthree.toml`、雛形生成、npmビルド導線
 - `js/`: Three.js 互換層へ接続するゲームエントリーポイント
 - `docs/architecture.md`: 仕様書の各項目と実装状況
 
-現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡す開発導線
+現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
+`HyperThreeNative.setClearColor()` / `setTriangleColor()`で描画状態を変更する
+開発導線
 までを提供します。任意のブラウザ向けThree.jsゲームをそのまま動かすには、
 DOM/WebGPU APIバインディング、入力・音声、GPU Driven Culling、Indirect Draw、
 glTF/KTX2の直接VRAM転送を引き続き実装する必要があります。

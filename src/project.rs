@@ -171,6 +171,11 @@ globalThis.HyperThreeGame = {
   targetObjects: 500000,
   renderer: "native-wgpu"
 };
+
+HyperThreeNative.setClearColor(0.015, 0.02, 0.05, 1.0);
+HyperThreeNative.setTriangleColor(0, 0.1, 0.95, 0.8);
+HyperThreeNative.setTriangleColor(1, 0.2, 0.4, 1.0);
+HyperThreeNative.setTriangleColor(2, 0.95, 0.3, 0.7);
 "#;
 
 const INIT_README: &str = r#"# My HyperThree Game

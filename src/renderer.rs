@@ -1,3 +1,4 @@
+use crate::bridge::SharedRenderState;
 use anyhow::{Context as _, Result};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -23,7 +24,7 @@ impl Vertex {
     }
 }
 
-const VERTICES: &[Vertex] = &[
+const DEFAULT_VERTICES: &[Vertex] = &[
     Vertex {
         position: [0.0, 0.72],
         color: [0.08, 0.85, 0.78],
@@ -46,11 +47,12 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    render_state: SharedRenderState,
     size: PhysicalSize<u32>,
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Result<Self> {
+    pub async fn new(window: Arc<Window>, render_state: SharedRenderState) -> Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -135,8 +137,8 @@ impl Renderer {
         });
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hyperthree-triangle-vertices"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(DEFAULT_VERTICES),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         Ok(Self {
@@ -147,6 +149,7 @@ impl Renderer {
             config,
             pipeline,
             vertex_buffer,
+            render_state,
             size,
         })
     }
@@ -162,6 +165,27 @@ impl Renderer {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        let snapshot = self
+            .render_state
+            .lock()
+            .expect("render state mutex should not be poisoned")
+            .snapshot();
+        let vertices = [
+            Vertex {
+                position: [0.0, 0.72],
+                color: snapshot.vertex_colors[0].map(|component| component as f32),
+            },
+            Vertex {
+                position: [-0.72, -0.58],
+                color: snapshot.vertex_colors[1].map(|component| component as f32),
+            },
+            Vertex {
+                position: [0.72, -0.58],
+                color: snapshot.vertex_colors[2].map(|component| component as f32),
+            },
+        ];
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -179,10 +203,10 @@ impl Renderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.025,
-                            g: 0.04,
-                            b: 0.09,
-                            a: 1.0,
+                            r: snapshot.clear_color[0],
+                            g: snapshot.clear_color[1],
+                            b: snapshot.clear_color[2],
+                            a: snapshot.clear_color[3],
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -193,7 +217,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..VERTICES.len() as u32, 0..1);
+            pass.draw(0..vertices.len() as u32, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();

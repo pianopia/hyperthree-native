@@ -1,4 +1,5 @@
 mod asset;
+mod bridge;
 mod js_runtime;
 mod project;
 mod renderer;
@@ -69,10 +70,20 @@ fn run_native(
     asset_path: Option<PathBuf>,
     manifest: Option<Manifest>,
 ) -> Result<()> {
-    let mut runtime = JsRuntime::new();
+    let render_state = bridge::NativeRenderState::shared();
+    let mut runtime = JsRuntime::new(render_state.clone())?;
     runtime.execute_source(include_str!("../js/three-bridge.js"))?;
     runtime.execute_file(&script)?;
     log::info!("executed JavaScript entry point: {}", script.display());
+    let snapshot = render_state
+        .lock()
+        .expect("render state mutex should not be poisoned")
+        .snapshot();
+    log::info!(
+        "native bridge state: clear={:?}, triangle_colors={:?}",
+        snapshot.clear_color,
+        snapshot.vertex_colors
+    );
 
     if let Some(asset_path) = asset_path {
         let asset = asset::MappedAsset::open(&asset_path)?;
@@ -108,7 +119,7 @@ fn run_native(
             .build(&event_loop)
             .context("failed to create native window")?,
     );
-    let mut renderer = pollster::block_on(Renderer::new(window))?;
+    let mut renderer = pollster::block_on(Renderer::new(window, render_state))?;
 
     event_loop.run(move |event, event_loop| {
         event_loop.set_control_flow(ControlFlow::Poll);
