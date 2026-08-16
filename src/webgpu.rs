@@ -1,5 +1,9 @@
 use anyhow::Result;
-use boa_engine::{js_string, Context, JsArgs, JsNativeError, JsResult, JsValue, NativeFunction};
+use boa_engine::{
+    js_string,
+    object::builtins::{AlignedVec, JsArrayBuffer},
+    Context, JsArgs, JsNativeError, JsResult, JsValue, NativeFunction,
+};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -294,6 +298,41 @@ impl NativeWebGpuContext {
             .ok_or_else(|| format!("unknown GPUBuffer handle {id}"))?;
         self.queue.write_buffer(buffer, offset, bytes);
         Ok(())
+    }
+
+    fn read_buffer(&self, id: u64, offset: u64, size: u64) -> Result<Vec<u8>, String> {
+        if size == 0 {
+            return Ok(Vec::new());
+        }
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let buffer = resources
+            .buffers
+            .get(&id)
+            .ok_or_else(|| format!("unknown GPUBuffer handle {id}"))?;
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| "GPUBuffer read range overflowed".to_string())?;
+        if end > buffer.size() {
+            return Err(format!(
+                "GPUBuffer read range {offset}..{end} exceeds {}",
+                buffer.size()
+            ));
+        }
+        let slice = buffer.slice(offset..end);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result.map_err(|error| error.to_string()));
+        });
+        self.device.poll(wgpu::Maintain::Wait);
+        receiver
+            .recv()
+            .map_err(|_| "GPUBuffer map callback was dropped".to_string())??;
+        let bytes = slice.get_mapped_range().to_vec();
+        buffer.unmap();
+        Ok(bytes)
     }
 
     fn destroy_buffer(&self, id: u64) -> Result<(), String> {
@@ -1295,6 +1334,27 @@ pub fn register_bindings(
                 .write_buffer(id, offset, &bytes)
                 .map(|_| JsValue::undefined())
                 .map_err(native_error)
+        },
+    )?;
+
+    let read_buffer_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuReadBuffer",
+        3,
+        move |_this, args, context| {
+            let id = number_arg(args, 0, context)? as u64;
+            let offset = number_arg(args, 1, context)? as u64;
+            let size = number_arg(args, 2, context)? as u64;
+            let bytes = read_buffer_gpu
+                .read_buffer(id, offset, size)
+                .map_err(native_error)?;
+            let block = AlignedVec::from_iter(0, bytes);
+            JsArrayBuffer::from_byte_block(block, context)
+                .map(Into::into)
+                .map_err(|error| {
+                    native_error(format!("failed to create readback ArrayBuffer: {error}"))
+                })
         },
     )?;
 
@@ -2793,19 +2853,31 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     const size = descriptor.size ?? 1;
     const id = __hyperthreeWebGpuCreateBuffer(size, descriptor.usage ?? GPUBufferUsage.COPY_DST);
     const mapped = descriptor.mappedAtCreation === true;
-    const shadow = mapped ? new ArrayBuffer(size) : null;
+    let shadow = mapped ? new ArrayBuffer(size) : null;
+    let mappedForRead = false;
     return makeHandle(id, {
       mapState: mapped ? 'mapped' : 'unmapped',
       getMappedRange(offset = 0, rangeSize = size - offset) {
         if (shadow === null) throw new TypeError('GPUBuffer is not mapped');
         return shadow.slice(offset, offset + rangeSize);
       },
-      mapAsync: async () => {},
-      unmap() {
-        if (shadow !== null) {
-          __hyperthreeWebGpuWriteBuffer(id, 0, new Uint8Array(shadow));
-          this.mapState = 'unmapped';
+      mapAsync: async (mode = GPUMapMode.READ, offset = 0, rangeSize = size - offset) => {
+        if ((mode & GPUMapMode.READ) !== 0) {
+          shadow = __hyperthreeWebGpuReadBuffer(id, offset, rangeSize);
+          mappedForRead = true;
+        } else {
+          shadow = new ArrayBuffer(rangeSize);
+          mappedForRead = false;
         }
+        this.mapState = 'mapped';
+      },
+      unmap() {
+        if (shadow !== null && !mappedForRead) {
+          __hyperthreeWebGpuWriteBuffer(id, 0, new Uint8Array(shadow));
+        }
+        shadow = null;
+        mappedForRead = false;
+        this.mapState = 'unmapped';
       },
       destroy: () => __hyperthreeWebGpuDestroyBuffer(id),
     });

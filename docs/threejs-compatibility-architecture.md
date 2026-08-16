@@ -74,7 +74,7 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 正規化した。さらにプロジェクト相対`fetch()`、`Request`、`Response`、`Headers`、
 `Blob`、`ArrayBuffer`、`TextDecoder`、`createImageBitmap`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
 用意した。`navigator.userAgent`、`console`、data URL、PNG decode、
-`GPUQueue.copyExternalImageToTexture`も含め、Three.js 0.179の
+`GPUQueue.copyExternalImageToTexture`、GPUBuffer readbackも含め、Three.js 0.179の
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
 AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
 外部PNG、canvas resizeを同じfixtureで検証済みである。Three.js 0.179の
@@ -82,7 +82,7 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はdevice-lost／
-present lifecycle、KTX2/Basis、DRACO/Meshopt、完全なreadback、未実装の標準WebGPU APIを
+present lifecycle、KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
 
 ### Phase B: Three.js renderer実行

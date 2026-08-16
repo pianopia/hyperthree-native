@@ -4,7 +4,8 @@ This fixture verifies the standard Three.js loading path rather than the
 native `drawAsset()` shortcut. It loads a project-relative glTF with an
 embedded buffer, an external-buffer glTF with an external PNG texture, and a
 GLB with an embedded PNG texture. It creates `SkinnedMesh`/`Skeleton` objects,
-advances an `AnimationMixer`, and renders the result with `WebGPURenderer`.
+advances an `AnimationMixer`, renders `InstancedMesh`/`Line`/`Sprite` objects,
+and exercises GPU buffer readback with `WebGPURenderer`.
 
 From the repository root:
 

@@ -39,6 +39,7 @@ globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
+globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfResizeEvent = false;
 window.addEventListener("resize", () => { globalThis.__gltfResizeEvent = window.innerWidth === 960 && window.innerHeight === 540; });
 globalThis.__gltfSmokeStage = "before-adapter";
@@ -46,6 +47,18 @@ globalThis.__gltfSmokeStage = "before-adapter";
 navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfSmokeStage = "after-adapter";
   const device = await adapter.requestDevice();
+  const sourceBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  const readbackBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  device.queue.writeBuffer(sourceBuffer, 0, new Uint8Array([7, 11, 13, 17]));
+  const readbackEncoder = device.createCommandEncoder();
+  readbackEncoder.copyBufferToBuffer(sourceBuffer, 0, readbackBuffer, 0, 4);
+  device.queue.submit([readbackEncoder.finish()]);
+  await readbackBuffer.mapAsync(GPUMapMode.READ);
+  const readbackBytes = new Uint8Array(readbackBuffer.getMappedRange());
+  globalThis.__gltfReadbackSmoke = readbackBytes[0] === 7 && readbackBytes[1] === 11 && readbackBytes[2] === 13 && readbackBytes[3] === 17;
+  readbackBuffer.unmap();
+  sourceBuffer.destroy();
+  readbackBuffer.destroy();
   const renderer = new WebGPURenderer({ canvas: globalThis.__hyperthreeNativeCanvas, antialias: false });
   globalThis.__gltfSmokeStage = "before-renderer-init";
   await renderer.init();
@@ -98,6 +111,7 @@ globalThis.HyperThreeGame = {
     if (!globalThis.__gltfGlbLoaded) throw new Error("GLB smoke did not settle");
     if (!globalThis.__gltfResizeEvent) throw new Error("native resize event did not settle");
     if (!globalThis.__gltfFeatureSmoke) throw new Error("InstancedMesh/Line/Sprite smoke did not settle");
+    if (!globalThis.__gltfReadbackSmoke) throw new Error("GPUBuffer readback smoke did not settle");
     if (!globalThis.__gltfSmokeRendered) throw new Error("GLTF WebGPU render smoke did not settle");
   },
   onStop() {},
