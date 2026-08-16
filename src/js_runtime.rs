@@ -883,6 +883,13 @@ impl JsRuntime {
                 globalThis.window = globalThis.window || globalThis;
                 globalThis.self = globalThis.self || globalThis;
                 globalThis.global = globalThis.global || globalThis;
+                globalThis.console = globalThis.console || {
+                  log() {},
+                  info() {},
+                  warn() {},
+                  error() {},
+                  debug() {},
+                };
                 globalThis.__hyperthreeAnimationFrameQueue = [];
                 globalThis.__hyperthreeAnimationFrameId = 0;
                 globalThis.requestAnimationFrame = (callback) => {
@@ -939,9 +946,39 @@ impl JsRuntime {
                     return value;
                   }
                 };
+                const decodeDataUrl = (url) => {
+                  const comma = url.indexOf(',');
+                  if (comma < 0) throw new TypeError(`invalid data URL: ${url}`);
+                  const metadata = url.slice(0, comma).toLowerCase();
+                  const payload = url.slice(comma + 1);
+                  if (metadata.endsWith(';base64')) {
+                    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+                    const output = [];
+                    let accumulator = 0;
+                    let bits = 0;
+                    for (const character of payload) {
+                      if (character === '=') break;
+                      const value = alphabet.indexOf(character);
+                      if (value < 0) continue;
+                      accumulator = (accumulator << 6) | value;
+                      bits += 6;
+                      if (bits >= 8) {
+                        bits -= 8;
+                        output.push((accumulator >> bits) & 0xff);
+                      }
+                    }
+                    return new Uint8Array(output).buffer;
+                  }
+                  const text = decodeURIComponent(payload);
+                  const bytes = new Uint8Array(text.length);
+                  for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index) & 0xff;
+                  return bytes.buffer;
+                };
                 globalThis.fetch = globalThis.fetch || (async (input) => {
                   const request = input instanceof Request ? input : new Request(input);
-                  const buffer = __hyperthreeReadAsset(request.url);
+                  const buffer = request.url.startsWith('data:')
+                    ? decodeDataUrl(request.url)
+                    : __hyperthreeReadAsset(request.url);
                   const headers = new Headers({ 'Content-Length': buffer.byteLength });
                   return {
                     url: request.url,
@@ -1069,22 +1106,217 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, str> {
     let minified = "}get(e){let t=this.weakMap;";
     let readable = "get( keys ) {\n\n\t\tlet map = this.weakMap;";
-
-    if source.contains(minified) {
-        return std::borrow::Cow::Owned(source.replace(
+    let mut normalized = if source.contains(minified) {
+        source.replace(
             minified,
             "}get(e){if(e.length===0)return;let t=this.weakMap;",
-        ));
-    }
-
-    if source.contains(readable) {
-        return std::borrow::Cow::Owned(source.replace(
+        )
+    } else if source.contains(readable) {
+        source.replace(
             readable,
             "get( keys ) {\n\n\t\tif ( keys.length === 0 ) return undefined;\n\n\t\tlet map = this.weakMap;",
-        ));
+        )
+    } else {
+        source.to_string()
+    };
+
+    let is_three_loader_bundle =
+        source.contains("GLTFLoader") || source.contains("THREE.GLTFLoader");
+    if (is_three_loader_bundle && normalize_boa_class_constructor_bindings(&mut normalized))
+        || normalized != source
+    {
+        std::borrow::Cow::Owned(normalized)
+    } else {
+        std::borrow::Cow::Borrowed(source)
+    }
+}
+
+/// Boa 0.21.1 can allocate zero lexical slots for a class constructor and
+/// then emit `PutLexicalValue` for a local `const`/`let`, which panics at
+/// runtime. Three.js loaders contain many such constructors. Restrict the
+/// compatibility rewrite to constructor bodies; game code and ordinary
+/// functions retain normal lexical semantics.
+fn normalize_boa_class_constructor_bindings(source: &mut String) -> bool {
+    let ranges = class_constructor_ranges(source);
+    if ranges.is_empty() {
+        return false;
     }
 
-    std::borrow::Cow::Borrowed(source)
+    let bytes = source.as_bytes();
+    let mut replacements = Vec::new();
+    for (start, end) in ranges {
+        let mut cursor = start;
+        while cursor < end {
+            if let Some((next, token)) = next_code_identifier(bytes, cursor, end) {
+                cursor = next;
+                if token == "const" || token == "let" {
+                    let token_start = next - token.len();
+                    replacements.push((token_start, next, "var"));
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    if replacements.is_empty() {
+        return false;
+    }
+
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        source.replace_range(start..end, replacement);
+    }
+    true
+}
+
+fn class_constructor_ranges(source: &str) -> Vec<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    while let Some((class_end, token)) = next_code_identifier(bytes, cursor, bytes.len()) {
+        cursor = class_end;
+        if token != "class" {
+            continue;
+        }
+        let Some(class_open) = next_code_byte(bytes, cursor, bytes.len(), b'{') else {
+            break;
+        };
+        let Some(class_close) = matching_delimiter(bytes, class_open, b'{', b'}') else {
+            break;
+        };
+        let mut body_cursor = class_open + 1;
+        while body_cursor < class_close {
+            let Some((identifier_end, identifier)) =
+                next_code_identifier(bytes, body_cursor, class_close)
+            else {
+                break;
+            };
+            body_cursor = identifier_end;
+            if identifier != "constructor" {
+                continue;
+            }
+            let Some(parameter_open) = next_code_byte(bytes, body_cursor, class_close, b'(') else {
+                continue;
+            };
+            let Some(parameter_close) = matching_delimiter(bytes, parameter_open, b'(', b')')
+            else {
+                continue;
+            };
+            let Some(body_open) = next_code_byte(bytes, parameter_close + 1, class_close, b'{')
+            else {
+                continue;
+            };
+            let Some(body_close) = matching_delimiter(bytes, body_open, b'{', b'}') else {
+                continue;
+            };
+            ranges.push((body_open + 1, body_close));
+            body_cursor = body_close + 1;
+        }
+        cursor = class_close + 1;
+    }
+    ranges
+}
+
+fn next_code_byte(bytes: &[u8], mut cursor: usize, end: usize, wanted: u8) -> Option<usize> {
+    while cursor < end {
+        if is_ignored_byte(bytes, &mut cursor, end) {
+            continue;
+        }
+        if bytes[cursor] == wanted {
+            return Some(cursor);
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn next_code_identifier(bytes: &[u8], mut cursor: usize, end: usize) -> Option<(usize, &str)> {
+    while cursor < end {
+        if is_ignored_byte(bytes, &mut cursor, end) {
+            continue;
+        }
+        if is_identifier_start(bytes[cursor]) {
+            let start = cursor;
+            cursor += 1;
+            while cursor < end && is_identifier_part(bytes[cursor]) {
+                cursor += 1;
+            }
+            return std::str::from_utf8(&bytes[start..cursor])
+                .ok()
+                .map(|identifier| (cursor, identifier));
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn matching_delimiter(bytes: &[u8], open: usize, opening: u8, closing: u8) -> Option<usize> {
+    let mut cursor = open;
+    let mut depth = 0usize;
+    while cursor < bytes.len() {
+        if is_ignored_byte(bytes, &mut cursor, bytes.len()) {
+            continue;
+        }
+        match bytes[cursor] {
+            value if value == opening => depth += 1,
+            value if value == closing => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(cursor);
+                }
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn is_ignored_byte(bytes: &[u8], cursor: &mut usize, end: usize) -> bool {
+    if *cursor >= end {
+        return false;
+    }
+    match bytes[*cursor] {
+        b'\'' | b'"' | b'`' => {
+            let quote = bytes[*cursor];
+            *cursor += 1;
+            while *cursor < end {
+                if bytes[*cursor] == b'\\' {
+                    *cursor = (*cursor + 2).min(end);
+                } else if bytes[*cursor] == quote {
+                    *cursor += 1;
+                    break;
+                } else {
+                    *cursor += 1;
+                }
+            }
+            true
+        }
+        b'/' if *cursor + 1 < end && bytes[*cursor + 1] == b'/' => {
+            *cursor += 2;
+            while *cursor < end && bytes[*cursor] != b'\n' {
+                *cursor += 1;
+            }
+            true
+        }
+        b'/' if *cursor + 1 < end && bytes[*cursor + 1] == b'*' => {
+            *cursor += 2;
+            while *cursor + 1 < end && !(bytes[*cursor] == b'*' && bytes[*cursor + 1] == b'/') {
+                *cursor += 1;
+            }
+            *cursor = (*cursor + 2).min(end);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$'
+}
+
+fn is_identifier_part(byte: u8) -> bool {
+    is_identifier_start(byte) || byte.is_ascii_digit()
 }
 
 fn is_module_source(path: &Path, source: &str) -> bool {
@@ -1396,6 +1628,14 @@ mod tests {
             normalize_three_compatibility_source(source),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn normalizes_boa_class_constructor_lexicals_only() {
+        let source = "/* GLTFLoader */ class Example{constructor(){const value=1;let other=2;this.value=value+other;}method(){const untouched=3;return untouched;}}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("constructor(){var value=1;var other=2;"));
+        assert!(normalized.contains("method(){const untouched=3;"));
     }
 
     #[test]
@@ -1798,6 +2038,7 @@ mod tests {
             .execute_source(
                 r#"
                 globalThis.__fetchProbe = false;
+                globalThis.__dataFetchProbe = '';
                 fetch("Cargo.toml")
                   .then(async (response) => {
                     const buffer = await response.arrayBuffer();
@@ -1805,12 +2046,15 @@ mod tests {
                     return response.ok && response.status === 200 && bytes[0] === 91;
                   })
                   .then((result) => { globalThis.__fetchProbe = result; });
+                fetch(new Request("data:text/plain;base64,SGk="))
+                  .then((response) => response.text())
+                  .then((result) => { globalThis.__dataFetchProbe = result; });
                 "#,
             )
             .unwrap();
         runtime
             .execute_source(
-                "if (globalThis.__fetchProbe !== true) throw new Error('fetch probe failed');",
+                "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi') throw new Error('fetch probe failed');",
             )
             .unwrap();
     }

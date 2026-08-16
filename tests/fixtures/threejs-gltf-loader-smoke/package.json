@@ -1,0 +1,14 @@
+{
+  "name": "hyperthree-threejs-gltf-loader-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "three": "^0.179.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

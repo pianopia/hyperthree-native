@@ -73,6 +73,11 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 `requestAnimationFrame()`、`cancelAnimationFrame()`、`window`、`self`、`global`
 の基本互換もネイティブフレームループへ接続されます。
 
+標準Loaderの縦切りは
+[`tests/fixtures/threejs-gltf-loader-smoke`](tests/fixtures/threejs-gltf-loader-smoke/README.md)
+で再現できます。Three.jsの`GLTFLoader.loadAsync()`がembedded bufferから
+SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描画します。
+
 ## 構成
 
 - `src/main.rs`: ネイティブホストとイベントループ
@@ -97,7 +102,8 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 `BufferGeometry`をネイティブ描画へ同期します。任意のブラウザ向けThree.js
 ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API
 バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
-完全な直接VRAM転送を引き続き実装する必要があります。
+完全な直接VRAM転送を引き続き実装する必要があります。現時点のGLTFLoader fixtureは
+embedded bufferまでで、GLB container、外部buffer、画像/KTX2、DRACO/Meshoptは未完了です。
 
 Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階計画は
 [`docs/threejs-compatibility-architecture.md`](docs/threejs-compatibility-architecture.md)

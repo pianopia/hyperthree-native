@@ -3017,6 +3017,9 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     requestDevice: async () => makeDevice(),
   };
   globalThis.navigator = globalThis.navigator || {};
+  globalThis.navigator.userAgent = globalThis.navigator.userAgent || 'HyperThreeNative/0.1';
+  globalThis.navigator.platform = globalThis.navigator.platform || 'HyperThreeNative';
+  globalThis.navigator.language = globalThis.navigator.language || 'en-US';
   globalThis.window = globalThis.window || globalThis;
   globalThis.window.devicePixelRatio = globalThis.window.devicePixelRatio || 1;
   globalThis.window.innerWidth = globalThis.window.innerWidth || nativeCanvas.width;

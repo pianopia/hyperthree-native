@@ -1,0 +1,12 @@
+[project]
+name = "threejs-gltf-loader-smoke"
+entry = "src/game.js"
+output = "dist/game.js"
+
+[window]
+title = "Three.js GLTFLoader Native Smoke"
+width = 960
+height = 540
+
+[build]
+command = "npm run build"
