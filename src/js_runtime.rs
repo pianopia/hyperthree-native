@@ -2,7 +2,7 @@ use crate::{
     asset::{decode_meshopt_buffer, AssetStore},
     audio::{decode_audio, AudioEngine, AudioFilter, AudioPlayback},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
-    draco::decode_mesh as decode_draco_mesh,
+    draco::decode_geometry as decode_draco_geometry,
     storage::{SandboxFileStore, StorageStore},
     webgpu::SharedNativeWebGpuContext,
 };
@@ -1444,7 +1444,7 @@ impl JsRuntime {
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeDraco"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
-                    let geometry = decode_draco_mesh(&source).map_err(|error| {
+                    let geometry = decode_draco_geometry(&source).map_err(|error| {
                         JsNativeError::error()
                             .with_message(format!("failed to decode Draco geometry: {error}"))
                     })?;
@@ -1458,6 +1458,7 @@ impl JsRuntime {
                         JsNativeError::error()
                             .with_message(format!("failed to create Draco index buffer: {error}"))
                     })?;
+                    let point_cloud = geometry.point_cloud;
                     let mut attributes = Vec::with_capacity(geometry.attributes.len());
                     for attribute in geometry.attributes {
                         let data_bytes = bytemuck::cast_slice::<f32, u8>(&attribute.data).to_vec();
@@ -1488,6 +1489,12 @@ impl JsRuntime {
                     }
                     let result = JsObject::with_object_proto(context.intrinsics());
                     result.set(js_string!("index"), index, false, context)?;
+                    result.set(
+                        js_string!("pointCloud"),
+                        JsValue::from(point_cloud),
+                        false,
+                        context,
+                    )?;
                     result.set(
                         js_string!("attributes"),
                         JsArray::from_iter(attributes, context),

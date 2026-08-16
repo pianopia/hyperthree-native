@@ -72,6 +72,7 @@
 - [ ] UASTC target matrix across ASTC/BC3/BC1/ETC2 on Windows/Linux GPU backends
 - [x] DRACO native mesh decode through standard GLTFLoader/DRACOLoader with Khronos Box fixture
 - [x] DRACO native decoder hook at preload/init/decodeGeometry boundaries, resilient to Vite minification and Worker absence
+- [x] DRACO native geometry dispatcher with sequential index shape and Point Cloud marker for standalone consumers
 - [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms

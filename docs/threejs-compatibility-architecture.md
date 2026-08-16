@@ -163,9 +163,11 @@ RGBA32/BC7へ変換するbinding testと、標準GLTFLoader経由のend-to-end f
 
 `DRACOLoader`のworker decode境界には`__hyperthreeDecodeDraco`を注入する。Rust側は
 `draco-oxide-decoder`で三角形meshを復号し、POSITION/NORMAL/TANGENT/TEXCOORD/COLOR/skin
-属性とindexをThree.jsの`BufferGeometry`形状へ戻す。Khronos公式Boxの
+属性とindexをThree.jsの`BufferGeometry`形状へ戻す。さらにdecoder入口をmesh/Point Cloudの
+geometry dispatcherへ統一し、Point Cloudはpointごとの属性と連番index、`pointCloud` markerを
+返せるstandalone形状にした。Khronos公式Boxの
 `KHR_draco_mesh_compression` glTFを、標準GLTFLoader/DRACOLoader経由でnative decodeする
-fixtureを検証済みである。UASTCのGPUターゲット別fixture、Dracoのpoint cloud/standalone API、
+fixtureを検証済みである。Point Cloudの実バイナリfixture、DRACO属性の全組み合わせ、
 および全属性・morph/animationの網羅は継続課題である。
 Vite等のminifierが引数名やメソッド形式を変更しても、native capability markerを使った
 preload/init/decodeGeometryの境界注入へフォールバックするため、ブラウザWorkerや
