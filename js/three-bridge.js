@@ -1,5 +1,7 @@
 // Browser-free seam for Three.js scenes. The native host consumes a compact
 // render list instead of exposing DOM/WebGL objects to the game bundle.
+const hyperthreeRegisteredGeometryIds = new Set();
+
 globalThis.HyperThreeNative = {
   version: "0.1.0",
   renderer: "wgpu-native",
@@ -23,8 +25,38 @@ globalThis.HyperThreeNative = {
   isKeyDown(code) {
     return __hyperthreeIsKeyDown(code);
   },
+  isMouseButtonDown(button = 0) {
+    return __hyperthreeIsMouseButtonDown(button);
+  },
+  getMousePosition() {
+    return __hyperthreeGetMousePosition();
+  },
   loadAsset(path) {
     return __hyperthreeLoadAsset(path);
+  },
+  drawAsset(path, meshIndex = 0, primitiveIndex = 0, options = {}) {
+    __hyperthreeDrawAsset(
+      path,
+      meshIndex,
+      primitiveIndex,
+      options.x ?? 0,
+      options.y ?? 0,
+      options.z ?? 0,
+      options.sx ?? 1,
+      options.sy ?? 1,
+      options.sz ?? 1,
+      options.rotationY ?? 0,
+      options.r ?? 0.1,
+      options.g ?? 0.8,
+      options.b ?? 0.95,
+      options.a ?? 1,
+    );
+  },
+  registerGeometry(id, positions, indices = []) {
+    __hyperthreeRegisterGeometry(id, positions, indices);
+  },
+  pushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1) {
+    __hyperthreePushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a);
   },
   syncThreeScene(scene, camera, options = {}) {
     const maxObjects = options.maxObjects ?? 4096;
@@ -67,7 +99,13 @@ globalThis.HyperThreeNative = {
         const isCube = geometryType === "BoxGeometry" || geometryType === "BoxBufferGeometry";
         const isPlane = geometryType === "PlaneGeometry" || geometryType === "PlaneBufferGeometry";
         const isSphere = geometryType === "SphereGeometry" || geometryType === "SphereBufferGeometry";
-        if (!isCube && !isPlane && !isSphere) {
+        const positionAttribute = object.geometry?.attributes?.position;
+        const customGeometryId = object.geometry?.id;
+        const isCustom = !isCube && !isPlane && !isSphere
+          && Number.isInteger(customGeometryId)
+          && customGeometryId >= 0
+          && positionAttribute?.array;
+        if (!isCube && !isPlane && !isSphere && !isCustom) {
           skippedObjects += 1;
           return;
         }
@@ -82,26 +120,51 @@ globalThis.HyperThreeNative = {
           : object.material;
         const color = material?.color || { r: 0.1, g: 0.8, b: 0.95 };
         const alpha = material?.opacity ?? 1;
-        const push = isPlane
-          ? HyperThreeNative.pushPlane
-          : isSphere
-            ? HyperThreeNative.pushSphere
-            : HyperThreeNative.pushCube;
-        push.call(
-          HyperThreeNative,
-          position[0],
-          position[1],
-          position[2],
-          scale.x,
-          scale.y,
-          scale.z,
-          rotationY,
-          color.r ?? 0.1,
-          color.g ?? 0.8,
-          color.b ?? 0.95,
-          alpha,
-          0,
-        );
+        if (isCustom) {
+          if (!hyperthreeRegisteredGeometryIds.has(customGeometryId)) {
+            HyperThreeNative.registerGeometry(
+              customGeometryId,
+              positionAttribute.array,
+              object.geometry.index?.array ?? [],
+            );
+            hyperthreeRegisteredGeometryIds.add(customGeometryId);
+          }
+          HyperThreeNative.pushGeometry(
+            customGeometryId,
+            position[0],
+            position[1],
+            position[2],
+            scale.x,
+            scale.y,
+            scale.z,
+            rotationY,
+            color.r ?? 0.1,
+            color.g ?? 0.8,
+            color.b ?? 0.95,
+            alpha,
+          );
+        } else {
+          const push = isPlane
+            ? HyperThreeNative.pushPlane
+            : isSphere
+              ? HyperThreeNative.pushSphere
+              : HyperThreeNative.pushCube;
+          push.call(
+            HyperThreeNative,
+            position[0],
+            position[1],
+            position[2],
+            scale.x,
+            scale.y,
+            scale.z,
+            rotationY,
+            color.r ?? 0.1,
+            color.g ?? 0.8,
+            color.b ?? 0.95,
+            alpha,
+            0,
+          );
+        }
         renderedObjects += 1;
       });
     }

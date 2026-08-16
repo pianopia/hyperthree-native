@@ -1,6 +1,9 @@
-use crate::bridge::{CameraSnapshot, CubeSnapshot, GeometryKind, SharedRenderState};
+use crate::bridge::{CameraSnapshot, GeometryData, GeometryKind, SharedRenderState};
 use anyhow::{Context as _, Result};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use wgpu::util::DeviceExt;
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -73,6 +76,19 @@ struct Instance {
     color: [f32; 4],
 }
 
+struct GpuGeometry {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    source: Arc<GeometryData>,
+}
+
+struct CustomBatch {
+    geometry_id: u64,
+    instance_offset: usize,
+    instance_count: usize,
+}
+
 pub struct Renderer {
     pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -87,6 +103,7 @@ pub struct Renderer {
     sphere_vertex_buffer: wgpu::Buffer,
     sphere_index_buffer: wgpu::Buffer,
     sphere_index_count: u32,
+    custom_geometries: HashMap<u64, GpuGeometry>,
     instance_buffer: wgpu::Buffer,
     instance_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
@@ -269,6 +286,7 @@ impl Renderer {
             sphere_vertex_buffer,
             sphere_index_buffer,
             sphere_index_count,
+            custom_geometries: HashMap::new(),
             instance_buffer,
             instance_bind_group,
             depth_texture,
@@ -319,7 +337,13 @@ impl Renderer {
                 .filter(|mesh| mesh.geometry as u8 == geometry as u8)
             {
                 instances.push(Instance {
-                    mvp: build_mvp(&snapshot.camera, mesh, aspect),
+                    mvp: build_mvp_values(
+                        &snapshot.camera,
+                        mesh.position,
+                        mesh.scale,
+                        mesh.rotation_y,
+                        aspect,
+                    ),
                     color: mesh.color.map(|component| component as f32),
                 });
             }
@@ -330,6 +354,50 @@ impl Renderer {
             }]
             .1 = instances.len() - batch_start;
         }
+        let mut custom_batches = Vec::new();
+        let mut custom_instances = BTreeMap::<u64, Vec<&crate::bridge::CustomMeshSnapshot>>::new();
+        for mesh in &snapshot.custom_meshes {
+            custom_instances
+                .entry(mesh.geometry_id)
+                .or_default()
+                .push(mesh);
+        }
+        let registry = snapshot
+            .geometry_registry
+            .lock()
+            .expect("geometry registry mutex should not be poisoned");
+        for (geometry_id, meshes) in custom_instances {
+            let Some(data) = registry.get(geometry_id) else {
+                log::warn!("custom geometry {geometry_id} was not registered");
+                continue;
+            };
+            self.ensure_custom_geometry(geometry_id, data);
+            let instance_offset = instances.len();
+            for mesh in meshes
+                .iter()
+                .take(MAX_INSTANCES.saturating_sub(instance_offset))
+            {
+                instances.push(Instance {
+                    mvp: build_mvp_values(
+                        &snapshot.camera,
+                        mesh.position,
+                        mesh.scale,
+                        mesh.rotation_y,
+                        aspect,
+                    ),
+                    color: mesh.color.map(|component| component as f32),
+                });
+            }
+            custom_batches.push(CustomBatch {
+                geometry_id,
+                instance_offset,
+                instance_count: instances.len() - instance_offset,
+            });
+            if instances.len() >= MAX_INSTANCES {
+                break;
+            }
+        }
+        drop(registry);
         if !instances.is_empty() {
             self.queue
                 .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
@@ -404,10 +472,62 @@ impl Renderer {
                 );
                 instance_offset += count;
             }
+            for batch in custom_batches {
+                let Some(geometry) = self.custom_geometries.get(&batch.geometry_id) else {
+                    continue;
+                };
+                pass.set_vertex_buffer(0, geometry.vertex_buffer.slice(..));
+                pass.set_index_buffer(geometry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(
+                    0..geometry.index_count,
+                    0,
+                    batch.instance_offset as u32
+                        ..(batch.instance_offset + batch.instance_count) as u32,
+                );
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
+    }
+
+    fn ensure_custom_geometry(&mut self, geometry_id: u64, data: Arc<GeometryData>) {
+        if self
+            .custom_geometries
+            .get(&geometry_id)
+            .is_some_and(|geometry| Arc::ptr_eq(&geometry.source, &data))
+        {
+            return;
+        }
+        let vertices: Vec<Vertex> = data
+            .positions
+            .iter()
+            .copied()
+            .map(|position| Vertex { position })
+            .collect();
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hyperthree-buffer-geometry-vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hyperthree-buffer-geometry-indices"),
+                contents: bytemuck::cast_slice(&data.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+        self.custom_geometries.insert(
+            geometry_id,
+            GpuGeometry {
+                vertex_buffer,
+                index_buffer,
+                index_count: data.indices.len() as u32,
+                source: data,
+            },
+        );
     }
 }
 
@@ -464,7 +584,13 @@ fn create_depth_resources(
     (texture, view)
 }
 
-fn build_mvp(camera: &CameraSnapshot, cube: &CubeSnapshot, aspect: f32) -> [[f32; 4]; 4] {
+fn build_mvp_values(
+    camera: &CameraSnapshot,
+    position: [f64; 3],
+    scale_values: [f64; 3],
+    rotation_y_value: f64,
+    aspect: f32,
+) -> [[f32; 4]; 4] {
     let eye = vec3(camera.position);
     let target = vec3(camera.target);
     let view = look_at(
@@ -483,10 +609,10 @@ fn build_mvp(camera: &CameraSnapshot, cube: &CubeSnapshot, aspect: f32) -> [[f32
         camera.far as f32,
     );
     let model = mat_mul(
-        &translation(vec3(cube.position)),
+        &translation(vec3(position)),
         &mat_mul(
-            &rotation_y(cube.rotation_y as f32),
-            &scale(vec3(cube.scale)),
+            &rotation_y(rotation_y_value as f32),
+            &scale(vec3(scale_values)),
         ),
     );
     mat_mul(&projection, &mat_mul(&view, &model))

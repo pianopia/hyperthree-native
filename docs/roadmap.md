@@ -9,12 +9,14 @@
 - [x] Cross-platform CI skeleton and headless GPU backend diagnostics
 - [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
 - [x] Project-relative mmap asset API and glTF/GLB metadata inspection
+- [x] Native glTF/GLB POSITION/index decode and cached GPU geometry upload
 - [x] Boa ES module execution with relative and `node_modules` resolution
 - [ ] Native audio and sandboxed filesystem data APIs
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry
-- [ ] Three.js WebGPU renderer bindings for arbitrary BufferGeometry/materials
-- [ ] glTF/KTX2 zero-copy decode and GPU upload
+- [x] Three.js position/index BufferGeometry registration and native GPU draw path
+- [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
+- [ ] glTF/KTX2 zero-copy texture decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
 

@@ -209,7 +209,91 @@ impl JsRuntime {
                 anyhow::anyhow!("failed to register sphere instance binding: {error}")
             })?;
 
-        let camera_state = render_state;
+        let geometry_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeRegisterGeometry"),
+                3,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let geometry_id = geometry_id_arg(args, 0, context)?;
+                        let position_values = number_array_arg(args, 1, context)?;
+                        if position_values.len() % 3 != 0 {
+                            return Err(JsNativeError::range()
+                                .with_message("position attribute length must be divisible by 3")
+                                .into());
+                        }
+                        let positions = position_values
+                            .chunks_exact(3)
+                            .map(|position| {
+                                [position[0] as f32, position[1] as f32, position[2] as f32]
+                            })
+                            .collect::<Vec<_>>();
+                        let index_values = number_array_arg(args, 2, context)?;
+                        let indices = if index_values.is_empty() {
+                            (0..positions.len() as u32).collect::<Vec<_>>()
+                        } else {
+                            index_values
+                                .into_iter()
+                                .map(|index| {
+                                    if index < 0.0 || index.fract() != 0.0 {
+                                        return Err(JsNativeError::range()
+                                            .with_message(
+                                                "geometry indices must be non-negative integers",
+                                            )
+                                            .into());
+                                    }
+                                    Ok(index as u32)
+                                })
+                                .collect::<JsResult<Vec<_>>>()?
+                        };
+                        geometry_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .register_geometry(geometry_id, positions, indices)
+                            .map_err(|error| JsNativeError::range().with_message(error))?;
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| anyhow::anyhow!("failed to register geometry binding: {error}"))?;
+
+        let geometry_instance_state = render_state.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreePushGeometry"), 12, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let geometry_id = geometry_id_arg(args, 0, context)?;
+                    let position = [
+                        number_arg(args, 1, context)?,
+                        number_arg(args, 2, context)?,
+                        number_arg(args, 3, context)?,
+                    ];
+                    let scale = [
+                        number_arg(args, 4, context)?,
+                        number_arg(args, 5, context)?,
+                        number_arg(args, 6, context)?,
+                    ];
+                    let rotation_y = number_arg(args, 7, context)?;
+                    let color = [
+                        number_arg(args, 8, context)?,
+                        number_arg(args, 9, context)?,
+                        number_arg(args, 10, context)?,
+                        number_arg(args, 11, context)?,
+                    ];
+                    geometry_instance_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("render state poisoned"))?
+                        .push_custom_mesh(geometry_id, position, scale, rotation_y, color);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register geometry instance binding: {error}")
+            })?;
+
+        let camera_state = render_state.clone();
         context
             .register_global_builtin_callable(js_string!("__hyperthreeSetCamera"), 9, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
@@ -235,6 +319,7 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register camera binding: {error}"))?;
 
+        let key_input_state = input_state.clone();
         context
             .register_global_builtin_callable(js_string!("__hyperthreeIsKeyDown"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
@@ -245,7 +330,7 @@ impl JsRuntime {
                             JsNativeError::typ().with_message("key code must be a string")
                         })?
                         .to_std_string_escaped();
-                    let pressed = input_state
+                    let pressed = key_input_state
                         .lock()
                         .map_err(|_| JsNativeError::error().with_message("input state poisoned"))?
                         .is_key_down(&code);
@@ -254,12 +339,56 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register keyboard binding: {error}"))?;
 
-        let asset_store = asset_store;
+        let mouse_button_input_state = input_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeIsMouseButtonDown"),
+                1,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let button = nonnegative_usize_arg(args, 0, context)?;
+                        let pressed = mouse_button_input_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .is_mouse_button_down(button as u8);
+                        Ok(JsValue::from(pressed))
+                    })
+                },
+            )
+            .map_err(|error| anyhow::anyhow!("failed to register mouse button binding: {error}"))?;
+
+        let mouse_position_input_state = input_state;
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeGetMousePosition"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, context| {
+                        let position = mouse_position_input_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .mouse_position();
+                        let value = JsObject::with_object_proto(context.intrinsics());
+                        value.set(js_string!("x"), JsValue::from(position[0]), false, context)?;
+                        value.set(js_string!("y"), JsValue::from(position[1]), false, context)?;
+                        Ok(value.into())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register mouse position binding: {error}")
+            })?;
+
+        let asset_store_for_load = asset_store.clone();
         context
             .register_global_builtin_callable(js_string!("__hyperthreeLoadAsset"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let path = string_arg(args, 0, context)?;
-                    let metadata = asset_store
+                    let metadata = asset_store_for_load
                         .lock()
                         .map_err(|_| JsNativeError::error().with_message("asset store poisoned"))?
                         .load(&path)
@@ -305,6 +434,58 @@ impl JsRuntime {
                 })
             })
             .map_err(|error| anyhow::anyhow!("failed to register asset binding: {error}"))?;
+
+        let asset_draw_store = asset_store;
+        let asset_draw_state = render_state;
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeDrawAsset"), 14, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let path = string_arg(args, 0, context)?;
+                    let mesh_index = nonnegative_usize_arg(args, 1, context)?;
+                    let primitive_index = nonnegative_usize_arg(args, 2, context)?;
+                    let position = [
+                        number_arg(args, 3, context)?,
+                        number_arg(args, 4, context)?,
+                        number_arg(args, 5, context)?,
+                    ];
+                    let scale = [
+                        number_arg(args, 6, context)?,
+                        number_arg(args, 7, context)?,
+                        number_arg(args, 8, context)?,
+                    ];
+                    let rotation_y = number_arg(args, 9, context)?;
+                    let color = [
+                        number_arg(args, 10, context)?,
+                        number_arg(args, 11, context)?,
+                        number_arg(args, 12, context)?,
+                        number_arg(args, 13, context)?,
+                    ];
+                    let geometry = asset_draw_store
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("asset store poisoned"))?
+                        .load_geometry(&path, mesh_index, primitive_index)
+                        .map_err(|error| JsNativeError::error().with_message(error.to_string()))?;
+                    let mut state = asset_draw_state.lock().map_err(|_| {
+                        JsNativeError::error().with_message("render state poisoned")
+                    })?;
+                    state
+                        .register_geometry(
+                            geometry.geometry_id,
+                            geometry.positions.clone(),
+                            geometry.indices.clone(),
+                        )
+                        .map_err(|error| JsNativeError::range().with_message(error))?;
+                    state.push_custom_mesh(
+                        geometry.geometry_id,
+                        position,
+                        scale,
+                        rotation_y,
+                        color,
+                    );
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register asset draw binding: {error}"))?;
 
         Ok(Self { context })
     }
@@ -450,17 +631,57 @@ impl ProjectModuleLoader {
             let package_source = fs::read_to_string(package_root.join("package.json"))
                 .with_context(|| format!("package `{package}` has no readable package.json"))?;
             let package_json: serde_json::Value = serde_json::from_str(&package_source)?;
-            package_json
-                .get("module")
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| package_json.get("main").and_then(serde_json::Value::as_str))
+            package_entry(&package_json, ".")
+                .or_else(|| {
+                    package_json
+                        .get("module")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    package_json
+                        .get("main")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("index.js"))
         } else {
-            PathBuf::from(subpath.trim_start_matches('/'))
+            let package_source = fs::read_to_string(package_root.join("package.json")).ok();
+            let package_json = package_source
+                .as_deref()
+                .and_then(|source| serde_json::from_str::<serde_json::Value>(source).ok());
+            package_json
+                .as_ref()
+                .and_then(|json| {
+                    package_entry(json, &format!("./{}", subpath.trim_start_matches('/')))
+                })
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(subpath.trim_start_matches('/')))
         };
         Ok(package_root.join(entry))
     }
+}
+
+fn package_entry(package_json: &serde_json::Value, condition: &str) -> Option<String> {
+    let exports = package_json.get("exports")?;
+    let target = if exports.is_object() && exports.get(condition).is_some() {
+        exports.get(condition)?
+    } else {
+        exports
+    };
+    export_target(target).map(str::to_string)
+}
+
+fn export_target(value: &serde_json::Value) -> Option<&str> {
+    if let Some(target) = value.as_str() {
+        return Some(target);
+    }
+    let object = value.as_object()?;
+    object
+        .get("import")
+        .and_then(export_target)
+        .or_else(|| object.get("default").and_then(export_target))
 }
 
 impl ModuleLoader for ProjectModuleLoader {
@@ -526,6 +747,53 @@ fn number_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult
     }
 }
 
+fn geometry_id_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<u64> {
+    let value = number_arg(args, index, context)?;
+    if value < 0.0 || value.fract() != 0.0 || value > u64::MAX as f64 {
+        return Err(JsNativeError::range()
+            .with_message("geometry id must be a non-negative integer")
+            .into());
+    }
+    Ok(value as u64)
+}
+
+fn nonnegative_usize_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<usize> {
+    let value = number_arg(args, index, context)?;
+    if value < 0.0 || value.fract() != 0.0 || value > usize::MAX as f64 {
+        return Err(JsNativeError::range()
+            .with_message("asset index must be a non-negative integer")
+            .into());
+    }
+    Ok(value as usize)
+}
+
+fn number_array_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<Vec<f64>> {
+    let object = args
+        .get_or_undefined(index)
+        .to_object(context)
+        .map_err(|_| JsNativeError::typ().with_message("geometry attribute must be array-like"))?;
+    let length = object
+        .get(js_string!("length"), context)?
+        .to_length(context)
+        .map_err(|_| JsNativeError::typ().with_message("geometry attribute length is invalid"))?;
+    if length > 3_000_000 {
+        return Err(JsNativeError::range()
+            .with_message("geometry attribute is too large")
+            .into());
+    }
+    let mut values = Vec::with_capacity(length as usize);
+    for index in 0..length as usize {
+        let value = object.get(index, context)?.to_number(context)?;
+        if !value.is_finite() {
+            return Err(JsNativeError::range()
+                .with_message("geometry attribute values must be finite numbers")
+                .into());
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
 #[cfg(test)]
 mod tests {
     use super::JsRuntime;
@@ -557,6 +825,40 @@ mod tests {
         let snapshot = render_state.lock().unwrap().snapshot();
         assert_eq!(snapshot.cubes.len(), 1);
         assert_eq!(snapshot.cubes[0].position[0], 0.25);
+    }
+
+    #[test]
+    fn javascript_reads_native_mouse_input() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        {
+            let mut input = input_state.lock().unwrap();
+            input.set_mouse_position(12.0, 24.0);
+            input.set_mouse_button(0, true);
+        }
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.HyperThreeGame = {
+                  update() {
+                    const mouse = HyperThreeNative.getMousePosition();
+                    __hyperthreeBeginFrame();
+                    __hyperthreePushCube(mouse.x, mouse.y, 0, 1, 1, 1, 0,
+                      HyperThreeNative.isMouseButtonDown(0) ? 1 : 0, 0, 0, 1, 0);
+                  }
+                };
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(0.0).unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.cubes[0].position, [12.0, 24.0, 0.0]);
+        assert_eq!(snapshot.cubes[0].color[0], 1.0);
     }
 
     #[test]
@@ -652,6 +954,55 @@ mod tests {
     }
 
     #[test]
+    fn three_scene_sync_registers_and_reuses_buffer_geometry() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                const geometry = {
+                  id: 42,
+                  type: "BufferGeometry",
+                  attributes: { position: { array: [0, 0, 0, 1, 0, 0, 0, 1, 0] } },
+                  index: { array: [0, 1, 2] },
+                };
+                const scene = {
+                  updateMatrixWorld() {},
+                  traverse(callback) {
+                    callback({
+                      visible: true,
+                      isMesh: true,
+                      geometry,
+                      position: { x: 1, y: 2, z: 3 },
+                      scale: { x: 1, y: 1, z: 1 },
+                      rotation: { y: 0 },
+                      material: { color: { r: 0.4, g: 0.5, b: 0.6 }, opacity: 1 },
+                    });
+                  },
+                };
+                globalThis.HyperThreeGame = {
+                  update() { HyperThreeNative.syncThreeScene(scene); },
+                };
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.custom_meshes.len(), 1);
+        assert_eq!(snapshot.custom_meshes[0].geometry_id, 42);
+        assert_eq!(snapshot.custom_meshes[0].position, [1.0, 2.0, 3.0]);
+        let registry = snapshot.geometry_registry.lock().unwrap();
+        let geometry = registry.get(42).unwrap();
+        assert_eq!(geometry.positions.len(), 3);
+        assert_eq!(geometry.indices, [0, 1, 2]);
+    }
+
+    #[test]
     fn javascript_can_load_project_relative_asset_metadata() {
         let render_state = NativeRenderState::shared();
         let input_state = NativeInputState::shared();
@@ -677,6 +1028,52 @@ mod tests {
     }
 
     #[test]
+    fn javascript_can_decode_and_draw_gltf_geometry_without_js_buffers() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hyperthree-gltf-draw-test-{suffix}"));
+        fs::create_dir_all(root.join("public")).unwrap();
+        fs::write(
+            root.join("public/scene.gltf"),
+            br#"{
+              "asset": {"version": "2.0"},
+              "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
+              "bufferViews": [{"buffer": 0, "byteLength": 36}],
+              "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]}],
+              "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]
+            }"#,
+        )
+        .unwrap();
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, &root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                HyperThreeNative.drawAsset("public/scene.gltf", 0, 0, {
+                  x: 4, y: 5, z: 6, r: 0.7, g: 0.6, b: 0.5,
+                });
+                "#,
+            )
+            .unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.custom_meshes.len(), 1);
+        assert_eq!(snapshot.custom_meshes[0].position, [4.0, 5.0, 6.0]);
+        assert!(snapshot
+            .geometry_registry
+            .lock()
+            .unwrap()
+            .get(snapshot.custom_meshes[0].geometry_id)
+            .is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn executes_es_module_entry_with_relative_import() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -687,7 +1084,7 @@ mod tests {
         fs::write(root.join("dependency.js"), "export const offset = 2;").unwrap();
         fs::write(
             root.join("node_modules/demo/package.json"),
-            r#"{"module":"source.js"}"#,
+            r#"{"exports":{".":{"import":"./source.js","default":"./source.js"}}}"#,
         )
         .unwrap();
         fs::write(

@@ -20,9 +20,12 @@ native rendering bridge. Put per-frame logic in
 HyperThreeGame.update(deltaSeconds), and use HyperThreeNative.isKeyDown("KeyW")
 for keyboard input. When using a Three.js Scene, call
 HyperThreeNative.syncThreeScene(scene, camera) each frame; its current native
-geometry coverage is BoxGeometry, PlaneGeometry, and SphereGeometry. Use
-HyperThreeNative.loadAsset("public/models/example.glb") for native asset
-mapping. Optional onStart() and onStop() callbacks are available.
+geometry coverage includes BoxGeometry, PlaneGeometry, SphereGeometry, and
+position/index BufferGeometry. Use HyperThreeNative.loadAsset("public/models/example.glb")
+for native asset metadata and HyperThreeNative.drawAsset("public/models/example.glb",
+0, 0, options) for native glTF primitive rendering. Optional onStart() and
+onStop() callbacks are available. Use isMouseButtonDown(0) and
+getMousePosition() for native pointer input.
 Keep the project buildable with npm run build.
 ```
 

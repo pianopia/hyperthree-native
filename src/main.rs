@@ -16,7 +16,7 @@ use std::{
     time::Instant,
 };
 use winit::{
-    event::{Event, WindowEvent},
+    event::{Event, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::PhysicalKey,
     window::WindowBuilder,
@@ -179,6 +179,20 @@ fn run_native(
                                 .set_key(format!("{code:?}"), event.state.is_pressed());
                         }
                     }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        input_state
+                            .lock()
+                            .expect("input state mutex should not be poisoned")
+                            .set_mouse_position(position.x, position.y);
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        if let Some(button) = mouse_button_id(button) {
+                            input_state
+                                .lock()
+                                .expect("input state mutex should not be poisoned")
+                                .set_mouse_button(button, state.is_pressed());
+                        }
+                    }
                     WindowEvent::RedrawRequested => match renderer.render() {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -210,6 +224,17 @@ fn run_native(
         }
     })?;
     Ok(())
+}
+
+fn mouse_button_id(button: MouseButton) -> Option<u8> {
+    match button {
+        MouseButton::Left => Some(0),
+        MouseButton::Middle => Some(1),
+        MouseButton::Right => Some(2),
+        MouseButton::Back => Some(3),
+        MouseButton::Forward => Some(4),
+        MouseButton::Other(_) => None,
+    }
 }
 
 fn main() -> Result<()> {
