@@ -3,13 +3,18 @@ use boa_engine::{js_string, Context, JsArgs, JsNativeError, JsResult, JsValue, N
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 #[derive(Debug)]
 pub struct NativeWebGpuContext {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    surface: Arc<wgpu::Surface<'static>>,
+    presented_this_frame: AtomicBool,
     resources: Mutex<Resources>,
 }
 
@@ -28,7 +33,15 @@ struct Resources {
     compute_pipelines: HashMap<u64, wgpu::ComputePipeline>,
     command_encoders: HashMap<u64, CommandEncoderState>,
     open_passes: HashMap<u64, OpenPass>,
-    command_buffers: HashMap<u64, wgpu::CommandBuffer>,
+    command_buffers: HashMap<u64, QueuedCommandBuffer>,
+    surface_textures: HashMap<u64, wgpu::SurfaceTexture>,
+    texture_view_sources: HashMap<u64, u64>,
+}
+
+#[derive(Debug)]
+struct QueuedCommandBuffer {
+    buffer: wgpu::CommandBuffer,
+    surface_textures: Vec<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -163,15 +176,25 @@ enum ComputeCommand {
 pub type SharedNativeWebGpuContext = Arc<NativeWebGpuContext>;
 
 impl NativeWebGpuContext {
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> SharedNativeWebGpuContext {
+    pub fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        surface: Arc<wgpu::Surface<'static>>,
+    ) -> SharedNativeWebGpuContext {
         Arc::new(Self {
             device,
             queue,
+            surface,
+            presented_this_frame: AtomicBool::new(false),
             resources: Mutex::new(Resources {
                 next_id: 1,
                 ..Resources::default()
             }),
         })
+    }
+
+    pub fn take_presented_this_frame(&self) -> bool {
+        self.presented_this_frame.swap(false, Ordering::AcqRel)
     }
 
     fn allocate_id(&self) -> Result<u64, String> {
@@ -323,18 +346,37 @@ impl NativeWebGpuContext {
             .resources
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
-        let texture = resources
-            .textures
-            .get(&texture_id)
-            .ok_or_else(|| format!("unknown GPUTexture handle {texture_id}"))?;
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = if let Some(texture) = resources.textures.get(&texture_id) {
+            texture.create_view(&wgpu::TextureViewDescriptor::default())
+        } else if let Some(surface_texture) = resources.surface_textures.get(&texture_id) {
+            surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        } else {
+            return Err(format!("unknown GPUTexture handle {texture_id}"));
+        };
         drop(resources);
+        let id = self.allocate_id()?;
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        resources.texture_views.insert(id, view);
+        resources.texture_view_sources.insert(id, texture_id);
+        Ok(id)
+    }
+
+    fn get_current_surface_texture(&self) -> Result<u64, String> {
+        let surface_texture = self
+            .surface
+            .get_current_texture()
+            .map_err(|error| format!("failed to acquire WebGPU canvas texture: {error}"))?;
         let id = self.allocate_id()?;
         self.resources
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?
-            .texture_views
-            .insert(id, view);
+            .surface_textures
+            .insert(id, surface_texture);
         Ok(id)
     }
 
@@ -513,9 +555,7 @@ impl NativeWebGpuContext {
             })
             .collect::<Vec<_>>();
         let vertex_entry = json_string(vertex, "entryPoint").unwrap_or_else(|| "main".to_string());
-        let fragment = descriptor
-            .get("fragment")
-            .filter(|value| !value.is_null());
+        let fragment = descriptor.get("fragment").filter(|value| !value.is_null());
         let fragment_module = fragment
             .map(|fragment| {
                 resources
@@ -932,6 +972,7 @@ impl NativeWebGpuContext {
             .command_encoders
             .remove(&encoder_id)
             .ok_or_else(|| format!("unknown GPUCommandEncoder handle {encoder_id}"))?;
+        let surface_textures = collect_surface_texture_ids(&state.commands, &resources);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -954,7 +995,13 @@ impl NativeWebGpuContext {
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?
             .command_buffers
-            .insert(id, command_buffer);
+            .insert(
+                id,
+                QueuedCommandBuffer {
+                    buffer: command_buffer,
+                    surface_textures,
+                },
+            );
         Ok(id)
     }
 
@@ -964,15 +1011,24 @@ impl NativeWebGpuContext {
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
         let mut command_buffers = Vec::with_capacity(command_buffer_ids.len());
+        let mut surface_texture_ids = Vec::new();
         for id in command_buffer_ids {
-            command_buffers.push(
-                resources
-                    .command_buffers
-                    .remove(id)
-                    .ok_or_else(|| format!("unknown GPUCommandBuffer handle {id}"))?,
-            );
+            let command_buffer = resources
+                .command_buffers
+                .remove(id)
+                .ok_or_else(|| format!("unknown GPUCommandBuffer handle {id}"))?;
+            command_buffers.push(command_buffer.buffer);
+            surface_texture_ids.extend(command_buffer.surface_textures);
         }
         self.queue.submit(command_buffers);
+        surface_texture_ids.sort_unstable();
+        surface_texture_ids.dedup();
+        for texture_id in surface_texture_ids {
+            if let Some(surface_texture) = resources.surface_textures.remove(&texture_id) {
+                surface_texture.present();
+                self.presented_this_frame.store(true, Ordering::Release);
+            }
+        }
         Ok(())
     }
 }
@@ -1090,6 +1146,26 @@ pub fn register_bindings(
                 .map(JsValue::from)
                 .map_err(native_error)
         },
+    )?;
+
+    let current_texture_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuGetCurrentTexture",
+        0,
+        move |_this, _args, _context| {
+            current_texture_gpu
+                .get_current_surface_texture()
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    register(
+        context,
+        "__hyperthreeWebGpuConfigureCanvas",
+        0,
+        |_this, _args, _context| Ok(JsValue::undefined()),
     )?;
 
     let sampler_gpu = gpu.clone();
@@ -1294,6 +1370,32 @@ fn json_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<V
             .with_message(format!("invalid WebGPU descriptor JSON: {error}"))
             .into()
     })
+}
+
+fn collect_surface_texture_ids(commands: &[RecordedCommand], resources: &Resources) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for command in commands {
+        if let RecordedCommand::RenderPass(pass) = command {
+            for attachment in &pass.colors {
+                collect_surface_texture_id(attachment.view, resources, &mut ids);
+                if let Some(resolve_target) = attachment.resolve_target {
+                    collect_surface_texture_id(resolve_target, resources, &mut ids);
+                }
+            }
+            if let Some(depth_stencil) = &pass.depth_stencil {
+                collect_surface_texture_id(depth_stencil.view, resources, &mut ids);
+            }
+        }
+    }
+    ids
+}
+
+fn collect_surface_texture_id(view_id: u64, resources: &Resources, ids: &mut Vec<u64>) {
+    if let Some(texture_id) = resources.texture_view_sources.get(&view_id) {
+        if resources.surface_textures.contains_key(texture_id) && !ids.contains(texture_id) {
+            ids.push(*texture_id);
+        }
+    }
 }
 
 fn encode_render_pass(
@@ -2135,6 +2237,37 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       destroy: () => {},
     });
   };
+  const makeSurfaceTexture = () => {
+    const id = __hyperthreeWebGpuGetCurrentTexture();
+    return makeHandle(id, {
+      __surfaceTexture: true,
+      createView: () => makeHandle(__hyperthreeWebGpuCreateTextureView(id), { __textureView: true }),
+      destroy: () => {},
+    });
+  };
+  const canvasContext = {
+    configure(configuration = {}) { __hyperthreeWebGpuConfigureCanvas(); canvasContext.configuration = configuration; },
+    unconfigure() { canvasContext.configuration = null; },
+    getCurrentTexture: makeSurfaceTexture,
+  };
+  const nativeCanvas = {
+    width: 1280,
+    height: 720,
+    style: {},
+    clientWidth: 1280,
+    clientHeight: 720,
+    getContext(type) { return type === 'webgpu' ? canvasContext : null; },
+    addEventListener() {},
+    removeEventListener() {},
+    setAttribute() {},
+    getAttribute() { return null; },
+  };
+  globalThis.__hyperthreeNativeCanvas = nativeCanvas;
+  globalThis.document = globalThis.document || {
+    createElement(name) { return name === 'canvas' ? nativeCanvas : { style: {}, addEventListener() {}, removeEventListener() {} }; },
+    createElementNS(_namespace, name) { return this.createElement(name); },
+    body: { appendChild() {}, removeChild() {} },
+  };
   const normalizeBindGroupEntry = entry => {
     const resource = entry.resource;
     let normalizedResource;
@@ -2291,6 +2424,10 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     requestDevice: async () => makeDevice(),
   };
   globalThis.navigator = globalThis.navigator || {};
+  globalThis.window = globalThis.window || globalThis;
+  globalThis.window.devicePixelRatio = globalThis.window.devicePixelRatio || 1;
+  globalThis.window.innerWidth = globalThis.window.innerWidth || nativeCanvas.width;
+  globalThis.window.innerHeight = globalThis.window.innerHeight || nativeCanvas.height;
   globalThis.navigator.gpu = {
     requestAdapter: async () => adapter,
     getPreferredCanvasFormat: () => 'bgra8unorm-srgb',

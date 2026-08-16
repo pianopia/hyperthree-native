@@ -140,7 +140,7 @@ struct ParticleBatch {
 
 pub struct Renderer {
     pub window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    surface: Arc<wgpu::Surface<'static>>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
@@ -163,6 +163,7 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
     render_state: SharedRenderState,
     size: PhysicalSize<u32>,
+    webgpu_context: SharedNativeWebGpuContext,
 }
 
 struct GpuTexture {
@@ -177,9 +178,11 @@ impl Renderer {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
-        let surface = instance
-            .create_surface(window.clone())
-            .context("failed to create native GPU surface")?;
+        let surface = Arc::new(
+            instance
+                .create_surface(window.clone())
+                .context("failed to create native GPU surface")?,
+        );
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -423,6 +426,8 @@ impl Renderer {
             ],
         });
         let (depth_texture, depth_view) = create_depth_resources(&device, &config);
+        let webgpu_context =
+            NativeWebGpuContext::new(device.clone(), queue.clone(), surface.clone());
 
         Ok(Self {
             window,
@@ -449,6 +454,7 @@ impl Renderer {
             depth_view,
             render_state,
             size,
+            webgpu_context,
         })
     }
 
@@ -466,10 +472,13 @@ impl Renderer {
     }
 
     pub fn webgpu_context(&self) -> SharedNativeWebGpuContext {
-        NativeWebGpuContext::new(self.device.clone(), self.queue.clone())
+        self.webgpu_context.clone()
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        if self.webgpu_context.take_presented_this_frame() {
+            return Ok(());
+        }
         let snapshot = self
             .render_state
             .lock()

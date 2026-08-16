@@ -61,8 +61,10 @@ JS GCとは独立して参照数と破棄を管理する。
 現在はこのフェーズの初期段階として、Boa上の`navigator.gpu`、adapter/device、
 `GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadに加え、BindGroup、
 Pipeline、CommandEncoder、RenderPass、ComputePassのnative実行sliceを実装済みで
-ある。次は`GPUCanvasContext`をネイティブwindowのswapchainへ接続し、Three.jsの
-WebGPURendererが生成したコマンドをそのまま画面へpresentする。
+ある。初期の`GPUCanvasContext.configure()`、`getCurrentTexture()`、native
+swapchainへのpresentまで接続済みである。次はresize/device-lost/present lifecycleを
+完成させ、Three.jsのWebGPURendererが通常のフレームループで生成したコマンドを
+そのまま画面へpresentする。
 
 ### Phase B: Three.js renderer実行
 
