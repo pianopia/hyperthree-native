@@ -39,7 +39,7 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- diagnostics
 ```
 
 起動すると `js/game.js` を評価したあと、ネイティブウィンドウを開きます。
-wgpu の直接描画で三角形が表示されれば、イベントループ・GPUサーフェス・描画
+wgpu の直接描画でキューブが表示されれば、イベントループ・GPUサーフェス・描画
 パイプラインが接続されています。
 
 ゼロコピー読み込みの確認には、任意のバイナリを渡します。
@@ -66,8 +66,8 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 - `.github/workflows/ci.yml`: macOS / Windows / LinuxのCI
 
 現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
-`HyperThreeNative.setClearColor()`、`setCamera()`、`setCube()`で描画状態を変更する
-開発導線
-までを提供します。任意のブラウザ向けThree.jsゲームをそのまま動かすには、
+`HyperThreeNative.setClearColor()`、`setCamera()`、`beginFrame()`、`pushCube()`で
+描画状態を更新し、`HyperThreeGame.update(deltaSeconds)`で毎フレーム処理できる
+開発導線までを提供します。任意のブラウザ向けThree.jsゲームをそのまま動かすには、
 DOM/WebGPU APIバインディング、入力・音声、GPU Driven Culling、Indirect Draw、
 glTF/KTX2の直接VRAM転送を引き続き実装する必要があります。

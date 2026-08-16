@@ -11,7 +11,16 @@ globalThis.HyperThreeNative = {
   setCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
     __hyperthreeSetCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
   },
+  beginFrame() {
+    __hyperthreeBeginFrame();
+  },
+  pushCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
+    __hyperthreePushCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
+  },
   setCamera(px, py, pz, tx, ty, tz, fovY, near, far) {
     __hyperthreeSetCamera(px, py, pz, tx, ty, tz, fovY, near, far);
+  },
+  isKeyDown(code) {
+    return __hyperthreeIsKeyDown(code);
   },
 };

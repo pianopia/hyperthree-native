@@ -10,10 +10,11 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 use js_runtime::JsRuntime;
 use project::Manifest;
 use renderer::Renderer;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
+    keyboard::PhysicalKey,
     window::WindowBuilder,
 };
 
@@ -74,18 +75,20 @@ fn run_native(
     manifest: Option<Manifest>,
 ) -> Result<()> {
     let render_state = bridge::NativeRenderState::shared();
-    let mut runtime = JsRuntime::new(render_state.clone())?;
+    let input_state = bridge::NativeInputState::shared();
+    let mut runtime = JsRuntime::new(render_state.clone(), input_state.clone())?;
     runtime.execute_source(include_str!("../js/three-bridge.js"))?;
     runtime.execute_file(&script)?;
+    runtime.execute_start()?;
     log::info!("executed JavaScript entry point: {}", script.display());
     let snapshot = render_state
         .lock()
         .expect("render state mutex should not be poisoned")
         .snapshot();
     log::info!(
-        "native bridge state: clear={:?}, cube={:?}, camera={:?}",
+        "native bridge state: clear={:?}, cubes={}, camera={:?}",
         snapshot.clear_color,
-        snapshot.cube,
+        snapshot.cubes.len(),
         snapshot.camera
     );
 
@@ -124,14 +127,34 @@ fn run_native(
             .context("failed to create native window")?,
     );
     let mut renderer = pollster::block_on(Renderer::new(window, render_state))?;
+    let mut last_frame = Instant::now();
 
     event_loop.run(move |event, event_loop| {
         event_loop.set_control_flow(ControlFlow::Poll);
         match event {
             Event::WindowEvent { window_id, event } if window_id == renderer.window.id() => {
                 match event {
-                    WindowEvent::CloseRequested => event_loop.exit(),
+                    WindowEvent::CloseRequested => {
+                        if let Err(error) = runtime.execute_shutdown() {
+                            log::error!("JavaScript shutdown callback failed: {error:#}");
+                        }
+                        event_loop.exit();
+                    }
                     WindowEvent::Resized(size) => renderer.resize(size),
+                    WindowEvent::Focused(false) => {
+                        input_state
+                            .lock()
+                            .expect("input state mutex should not be poisoned")
+                            .clear();
+                    }
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if let PhysicalKey::Code(code) = event.physical_key {
+                            input_state
+                                .lock()
+                                .expect("input state mutex should not be poisoned")
+                                .set_key(format!("{code:?}"), event.state.is_pressed());
+                        }
+                    }
                     WindowEvent::RedrawRequested => match renderer.render() {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -145,7 +168,20 @@ fn run_native(
                     _ => {}
                 }
             }
-            Event::AboutToWait => renderer.window.request_redraw(),
+            Event::AboutToWait => {
+                let now = Instant::now();
+                let delta_seconds = now.duration_since(last_frame).as_secs_f64().clamp(0.0, 0.1);
+                last_frame = now;
+                if let Err(error) = runtime.execute_frame(delta_seconds) {
+                    log::error!("JavaScript frame update failed: {error:#}");
+                    if let Err(shutdown_error) = runtime.execute_shutdown() {
+                        log::error!("JavaScript shutdown callback failed: {shutdown_error:#}");
+                    }
+                    event_loop.exit();
+                } else {
+                    renderer.window.request_redraw();
+                }
+            }
             _ => {}
         }
     })?;

@@ -7,7 +7,8 @@
 - [x] JavaScript-to-native camera/mesh/material bridge
 - [ ] macOS Metal, Windows DirectX 12/Vulkan, Linux Vulkan/software CI matrix
 - [x] Cross-platform CI skeleton and headless GPU backend diagnostics
-- [ ] Native input, audio, clock, filesystem, and lifecycle APIs
+- [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
+- [ ] Native audio and sandboxed filesystem APIs
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [ ] Three.js WebGPU renderer bindings
 - [ ] glTF/KTX2 zero-copy decode and GPU upload

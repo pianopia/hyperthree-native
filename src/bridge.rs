@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CubeSnapshot {
@@ -17,32 +20,62 @@ pub struct CameraSnapshot {
     pub far: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NativeRenderSnapshot {
     pub clear_color: [f64; 4],
-    pub cube: CubeSnapshot,
+    pub cubes: Vec<CubeSnapshot>,
     pub camera: CameraSnapshot,
 }
 
 #[derive(Debug)]
 pub struct NativeRenderState {
     clear_color: [f64; 4],
-    cube: CubeSnapshot,
+    cubes: Vec<CubeSnapshot>,
     camera: CameraSnapshot,
 }
 
 pub type SharedRenderState = Arc<Mutex<NativeRenderState>>;
 
+#[derive(Debug, Default)]
+pub struct NativeInputState {
+    pressed_keys: HashSet<String>,
+}
+
+pub type SharedInputState = Arc<Mutex<NativeInputState>>;
+
+impl NativeInputState {
+    pub fn shared() -> SharedInputState {
+        Arc::new(Mutex::new(Self::default()))
+    }
+
+    pub fn set_key(&mut self, code: impl Into<String>, pressed: bool) {
+        let code = code.into();
+        if pressed {
+            self.pressed_keys.insert(code);
+        } else {
+            self.pressed_keys.remove(&code);
+        }
+    }
+
+    pub fn is_key_down(&self, code: &str) -> bool {
+        self.pressed_keys.contains(code)
+    }
+
+    pub fn clear(&mut self) {
+        self.pressed_keys.clear();
+    }
+}
+
 impl Default for NativeRenderState {
     fn default() -> Self {
         Self {
             clear_color: [0.025, 0.04, 0.09, 1.0],
-            cube: CubeSnapshot {
+            cubes: vec![CubeSnapshot {
                 position: [0.0, 0.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
                 rotation_y: 0.0,
                 color: [0.1, 0.8, 0.95, 1.0],
-            },
+            }],
             camera: CameraSnapshot {
                 position: [0.0, 0.0, 4.0],
                 target: [0.0, 0.0, 0.0],
@@ -62,7 +95,7 @@ impl NativeRenderState {
     pub fn snapshot(&self) -> NativeRenderSnapshot {
         NativeRenderSnapshot {
             clear_color: self.clear_color,
-            cube: self.cube,
+            cubes: self.cubes.clone(),
             camera: self.camera,
         }
     }
@@ -78,12 +111,36 @@ impl NativeRenderState {
         rotation_y: f64,
         color: [f64; 4],
     ) {
-        self.cube = CubeSnapshot {
+        let cube = CubeSnapshot {
             position,
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
         };
+        if let Some(first) = self.cubes.first_mut() {
+            *first = cube;
+        } else {
+            self.cubes.push(cube);
+        }
+    }
+
+    pub fn push_cube(
+        &mut self,
+        position: [f64; 3],
+        scale: [f64; 3],
+        rotation_y: f64,
+        color: [f64; 4],
+    ) {
+        self.cubes.push(CubeSnapshot {
+            position,
+            scale: scale.map(|value| value.max(0.001)),
+            rotation_y,
+            color: color.map(|component| component.clamp(0.0, 1.0)),
+        });
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.cubes.clear();
     }
 
     pub fn set_camera(
@@ -107,7 +164,7 @@ impl NativeRenderState {
 
 #[cfg(test)]
 mod tests {
-    use super::NativeRenderState;
+    use super::{NativeInputState, NativeRenderState};
 
     #[test]
     fn clamps_colors_to_gpu_range() {
@@ -116,5 +173,15 @@ mod tests {
         let snapshot = state.snapshot();
         assert_eq!(snapshot.clear_color, [0.0, 0.25, 1.0, 1.0]);
         assert_eq!(snapshot.camera.position, [0.0, 0.0, 4.0]);
+        assert_eq!(snapshot.cubes.len(), 1);
+    }
+
+    #[test]
+    fn input_state_tracks_physical_keys() {
+        let mut input = NativeInputState::default();
+        input.set_key("KeyW", true);
+        assert!(input.is_key_down("KeyW"));
+        input.clear();
+        assert!(!input.is_key_down("KeyW"));
     }
 }

@@ -8,7 +8,7 @@ architecture specification.
 | Native host / direct swapchain | `src/renderer.rs` creates a native `winit` window and a `wgpu` surface | platform-specific Vulkan / Metal / DirectX validation |
 | JS execution outside a browser | `src/js_runtime.rs` evaluates the entry script in an embeddable runtime | replace the adapter with Embedded V8 and expose the isolate lifecycle |
 | Zero-copy asset path | `src/asset.rs` maps binary files with `memmap2` | native glTF / KTX2 decoder and direct GPU upload |
-| JS-to-native render bridge | `src/bridge.rs` and `js/three-bridge.js` pass clear color, camera, cube mesh transform, and material color into wgpu | WebGPU device, buffer, texture, and command encoder bindings |
+| JS-to-native render bridge | `src/bridge.rs` and `js/three-bridge.js` pass clear color, camera, per-frame cube instances, material color, and keyboard state into wgpu | WebGPU device, buffer, texture, and command encoder bindings |
 | Three.js compatibility seam | `js/three-bridge.js` defines the browser-free native contract | bind WebGPU objects and run the Three.js WebGPU backend |
 | GPU-driven rendering | renderer owns the native render pass | compute culling, indirect draw buffers, and instancing benchmark |
 | Distribution and monetization | roadmap and commerce design are documented separately | cross-platform packaging, Connect onboarding, checkout, ledger, payouts, and dashboards |
@@ -18,6 +18,8 @@ That makes the expensive V8 and native decoder work incremental instead of
 coupling it to window bring-up.
 
 The current bridge is intentionally small but live: a game can call
-`HyperThreeNative.setClearColor()`, `setCamera()`, and `setCube()` and the next
-native frame consumes those values. It is not yet a complete `GPUDevice`
-binding.
+`HyperThreeNative.setClearColor()`, `setCamera()`, `beginFrame()`, and
+`pushCube()`; the native host invokes `HyperThreeGame.update(deltaSeconds)` on
+each frame and consumes the resulting instance list. `isKeyDown()` exposes
+physical keyboard state, while optional `onStart()` and `onStop()` callbacks
+cover host lifecycle edges. It is not yet a complete `GPUDevice` binding.

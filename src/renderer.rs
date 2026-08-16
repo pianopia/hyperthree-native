@@ -1,10 +1,11 @@
-use crate::bridge::{NativeRenderSnapshot, SharedRenderState};
+use crate::bridge::{CameraSnapshot, CubeSnapshot, SharedRenderState};
 use anyhow::{Context as _, Result};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::{dpi::PhysicalSize, window::Window};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
+const MAX_INSTANCES: usize = 4096;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -50,7 +51,7 @@ const CUBE_INDICES: &[u16] = &[
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
+struct Instance {
     mvp: [[f32; 4]; 4],
     color: [f32; 4],
 }
@@ -64,8 +65,8 @@ pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    instance_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
     render_state: SharedRenderState,
@@ -127,14 +128,14 @@ impl Renderer {
             label: Some("hyperthree-cube-shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/cube.wgsl").into()),
         });
-        let uniform_bind_group_layout =
+        let instance_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("hyperthree-uniform-layout"),
+                label: Some("hyperthree-instance-layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -143,7 +144,7 @@ impl Renderer {
             });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hyperthree-pipeline-layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout],
+            bind_group_layouts: &[&instance_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -194,18 +195,18 @@ impl Renderer {
             contents: bytemuck::cast_slice(CUBE_INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hyperthree-scene-uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hyperthree-scene-instances"),
+            size: (std::mem::size_of::<Instance>() * MAX_INSTANCES) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hyperthree-uniform-bind-group"),
-            layout: &uniform_bind_group_layout,
+        let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hyperthree-instance-bind-group"),
+            layout: &instance_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+                resource: instance_buffer.as_entire_binding(),
             }],
         });
         let (depth_texture, depth_view) = create_depth_resources(&device, &config);
@@ -219,8 +220,8 @@ impl Renderer {
             pipeline,
             vertex_buffer,
             index_buffer,
-            uniform_buffer,
-            uniform_bind_group,
+            instance_buffer,
+            instance_bind_group,
             depth_texture,
             depth_view,
             render_state,
@@ -247,15 +248,22 @@ impl Renderer {
             .lock()
             .expect("render state mutex should not be poisoned")
             .snapshot();
-        let uniforms = Uniforms {
-            mvp: build_mvp(
-                &snapshot,
-                self.config.width as f32 / self.config.height as f32,
-            ),
-            color: snapshot.cube.color.map(|component| component as f32),
-        };
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        let instance_count = snapshot.cubes.len().min(MAX_INSTANCES);
+        if snapshot.cubes.len() > MAX_INSTANCES {
+            log::warn!("native instance limit reached; rendering first {MAX_INSTANCES} cubes");
+        }
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        let instances: Vec<Instance> = snapshot.cubes[..instance_count]
+            .iter()
+            .map(|cube| Instance {
+                mvp: build_mvp(&snapshot.camera, cube, aspect),
+                color: cube.color.map(|component| component as f32),
+            })
+            .collect();
+        if !instances.is_empty() {
+            self.queue
+                .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        }
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -294,10 +302,10 @@ impl Renderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, &self.instance_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..CUBE_INDICES.len() as u32, 0, 0..1);
+            pass.draw_indexed(0..CUBE_INDICES.len() as u32, 0, 0..instance_count as u32);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -327,8 +335,7 @@ fn create_depth_resources(
     (texture, view)
 }
 
-fn build_mvp(snapshot: &NativeRenderSnapshot, aspect: f32) -> [[f32; 4]; 4] {
-    let camera = &snapshot.camera;
+fn build_mvp(camera: &CameraSnapshot, cube: &CubeSnapshot, aspect: f32) -> [[f32; 4]; 4] {
     let eye = vec3(camera.position);
     let target = vec3(camera.target);
     let view = look_at(
@@ -346,7 +353,6 @@ fn build_mvp(snapshot: &NativeRenderSnapshot, aspect: f32) -> [[f32; 4]; 4] {
         camera.near as f32,
         camera.far as f32,
     );
-    let cube = &snapshot.cube;
     let model = mat_mul(
         &translation(vec3(cube.position)),
         &mat_mul(

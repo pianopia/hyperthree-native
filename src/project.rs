@@ -175,6 +175,43 @@ globalThis.HyperThreeGame = {
 HyperThreeNative.setClearColor(0.015, 0.02, 0.05, 1.0);
 HyperThreeNative.setCamera(0, 0, 4, 0, 0, 0, 60, 0.1, 100);
 HyperThreeNative.setCube(0, 0, 0, 1.4, 1.4, 1.4, 0.55, 0.1, 0.8, 0.95, 1, 0);
+
+let elapsed = 0;
+globalThis.HyperThreeGame.update = (deltaSeconds) => {
+  elapsed += deltaSeconds;
+  HyperThreeNative.beginFrame();
+  HyperThreeNative.pushCube(
+    0,
+    Math.sin(elapsed) * 0.25,
+    0,
+    1.4,
+    1.4,
+    1.4,
+    elapsed + 0.55,
+    0.1,
+    0.8,
+    0.95,
+    1,
+    0,
+  );
+  HyperThreeNative.pushCube(
+    -1.5,
+    0,
+    0,
+    0.5,
+    0.5,
+    0.5,
+    -elapsed,
+    0.95,
+    0.35,
+    0.2,
+    1,
+    0,
+  );
+};
+
+globalThis.HyperThreeGame.onStart = () => {};
+globalThis.HyperThreeGame.onStop = () => {};
 "#;
 
 const INIT_README: &str = r#"# My HyperThree Game
