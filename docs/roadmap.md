@@ -42,6 +42,7 @@
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
+- [x] WebGPU canvas surface texture lifetime cleanup and Lost/Outdated native surface reconfiguration
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [x] Native AssetStore `EXT_meshopt_compression` attribute/triangle/index-sequence decode with filters
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer

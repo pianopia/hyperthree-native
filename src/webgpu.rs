@@ -595,10 +595,21 @@ impl NativeWebGpuContext {
     }
 
     fn get_current_surface_texture(&self) -> Result<u64, String> {
-        let surface_texture = self
-            .surface
-            .get_current_texture()
-            .map_err(|error| format!("failed to acquire WebGPU canvas texture: {error}"))?;
+        let surface_texture = match self.surface.get_current_texture() {
+            Ok(surface_texture) => surface_texture,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                let config = self
+                    .surface_config
+                    .lock()
+                    .map_err(|_| "WebGPU surface configuration poisoned".to_string())?
+                    .clone();
+                self.surface.configure(&self.device, &config);
+                self.surface.get_current_texture().map_err(|error| {
+                    format!("failed to reacquire WebGPU canvas texture after reconfigure: {error}")
+                })?
+            }
+            Err(error) => return Err(format!("failed to acquire WebGPU canvas texture: {error}")),
+        };
         let id = self.allocate_id()?;
         self.resources
             .lock()
@@ -606,6 +617,16 @@ impl NativeWebGpuContext {
             .surface_textures
             .insert(id, surface_texture);
         Ok(id)
+    }
+
+    fn discard_surface_texture(&self, id: u64) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        resources.surface_textures.remove(&id);
+        remove_surface_texture_views(&mut resources, id);
+        Ok(())
     }
 
     fn create_sampler(&self, descriptor: &Value) -> Result<u64, String> {
@@ -1520,6 +1541,7 @@ impl NativeWebGpuContext {
         for texture_id in surface_texture_ids {
             if let Some(surface_texture) = resources.surface_textures.remove(&texture_id) {
                 surface_texture.present();
+                remove_surface_texture_views(&mut resources, texture_id);
                 self.presented_this_frame.store(true, Ordering::Release);
             }
         }
@@ -1730,6 +1752,20 @@ pub fn register_bindings(
             current_texture_gpu
                 .get_current_surface_texture()
                 .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let discard_texture_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDiscardSurfaceTexture",
+        1,
+        move |_this, args, context| {
+            let texture_id = number_arg(args, 0, context)? as u64;
+            discard_texture_gpu
+                .discard_surface_texture(texture_id)
+                .map(|_| JsValue::undefined())
                 .map_err(native_error)
         },
     )?;
@@ -2088,6 +2124,18 @@ fn collect_surface_texture_ids(commands: &[RecordedCommand], resources: &Resourc
         }
     }
     ids
+}
+
+fn remove_surface_texture_views(resources: &mut Resources, texture_id: u64) {
+    let stale_views = resources
+        .texture_view_sources
+        .iter()
+        .filter_map(|(view_id, source_id)| (*source_id == texture_id).then_some(*view_id))
+        .collect::<Vec<_>>();
+    for view_id in stale_views {
+        resources.texture_view_sources.remove(&view_id);
+        resources.texture_views.remove(&view_id);
+    }
 }
 
 fn texture_resource(resources: &Resources, id: u64) -> Result<&wgpu::Texture, String> {
@@ -3325,7 +3373,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     return makeHandle(id, {
       __surfaceTexture: true,
       createView: (viewDescriptor = {}) => makeHandle(__hyperthreeWebGpuCreateTextureView(id, descriptorJson(viewDescriptor)), { __textureView: true }),
-      destroy: () => {},
+      destroy: () => __hyperthreeWebGpuDiscardSurfaceTexture(id),
     });
   };
   const canvasContext = {
