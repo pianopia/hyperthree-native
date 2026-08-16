@@ -80,7 +80,10 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 外部PNG、canvas resizeを同じfixtureで検証済みである。Three.js 0.179の
 `MeshStandardNodeMaterial`、TSL `colorNode`、
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
-実シーンをスモーク済みである。constructor内lexical bindingを`var`へ限定正規化する
+実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
+shadow、equirectangular environment、MRTも同じfixtureでスモーク済みである。indirect drawの
+ネイティブコマンドバインディングは実装済みだが、標準Three.js fixtureでの検証は未完了である。
+constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はdevice-lost／
 present lifecycle、KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
@@ -102,8 +105,9 @@ animation clipを、JSヒープを経由せずネイティブ側でストリー�
 
 TSL/NodeMaterialのshader graph、custom particle、instancing、post-processing、shadow、
 environment lighting、compute culling、indirect drawを同じWebGPU契約で実行する。
-NodeMaterialとpost-processingの標準経路はスモーク済みだが、公式サンプル全体、画像／
-環境テクスチャ、MRT、shadow、indirect drawはまだ互換性テストを追加する段階である。
+NodeMaterialとpost-processing、画像／環境テクスチャ、MRT、shadow、indirect drawの
+初期経路はスモーク済みだが、公式サンプル全体と高度な環境／shadow／GPU-driven経路は
+まだ互換性テストを追加する段階である。
 
 ## 互換性の判定基準
 
@@ -113,8 +117,8 @@ Three.js公式のWebGPUサンプルを次のカテゴリで実行する。
 1. Standard / Physical material、texture、normal、roughness、metalness
 2. GLTFLoader、AnimationMixer、skin、morph target（embedded/external/GLBとPNG textureのsmoke済み）
 3. InstancedMesh、BatchedMesh、Points、Line、Sprite（InstancedMesh/Line/Sprite smoke済み）
-4. TSL/NodeMaterial、compute、post-processing
-5. Shadow、environment map、multiple render target、indirect draw
+4. TSL/NodeMaterial、compute、post-processing（TSL/compute/post-processing smoke済み）
+5. Shadow、environment map、multiple render target（fixture smoke済み）、indirect draw（未完了）
 
 各カテゴリにブラウザ版との画像比較、GPU validation、メモリ使用量、フレーム時間
 のテストを用意し、未対応APIをゲーム起動後に黙って簡略化しない。未対応の場合は

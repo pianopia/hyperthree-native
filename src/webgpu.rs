@@ -2720,7 +2720,41 @@ fn sanitize_wgsl(source: &str) -> String {
         .filter(|line| !line.trim_start().starts_with("diagnostic("))
         .collect::<Vec<_>>()
         .join("\n");
-    normalize_texture_load_levels(&source)
+    let source = normalize_texture_load_levels(&source);
+    normalize_abstract_integer_casts(&source)
+}
+
+fn normalize_abstract_integer_casts(source: &str) -> String {
+    let source = normalize_integer_cast(source, "u32(", "u");
+    normalize_integer_cast(&source, "i32(", "i")
+}
+
+fn normalize_integer_cast(source: &str, function: &str, suffix: &str) -> String {
+    let mut normalized = String::with_capacity(source.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = source[cursor..].find(function) {
+        let start = cursor + relative_start;
+        normalized.push_str(&source[cursor..start]);
+        let open = start + function.len() - 1;
+        let Some(end) = matching_parenthesis(source, open) else {
+            normalized.push_str(&source[start..]);
+            return normalized;
+        };
+        let value = source[open + 1..end].trim();
+        if value.contains('.') || value.contains('e') || value.contains('E') {
+            if let Ok(value) = value.parse::<f64>() {
+                if value.is_finite() && value.fract() == 0.0 {
+                    normalized.push_str(&format!("{}{}", value as i64, suffix));
+                    cursor = end + 1;
+                    continue;
+                }
+            }
+        }
+        normalized.push_str(&source[start..=end]);
+        cursor = end + 1;
+    }
+    normalized.push_str(&source[cursor..]);
+    normalized
 }
 
 fn normalize_texture_load_levels(source: &str) -> String {
@@ -3268,5 +3302,12 @@ mod tests {
             sanitize_wgsl(source),
             "nodeVar = textureLoad( texture, coord, layer, i32(2));"
         );
+    }
+
+    #[test]
+    fn normalizes_abstract_integer_literals_for_naga() {
+        let source = "let level = u32( 0.0 ); let layer = i32( 1.0 );";
+
+        assert_eq!(sanitize_wgsl(source), "let level = 0u; let layer = 1i;");
     }
 }

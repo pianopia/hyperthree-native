@@ -3,6 +3,26 @@ import { WebGPURenderer } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const scene = new THREE.Scene();
+const environmentTexture = new THREE.DataTexture(
+  new Uint8Array([
+    96, 128, 192, 255, 96, 128, 192, 255, 96, 128, 192, 255, 96, 128, 192, 255,
+    96, 128, 192, 255, 96, 128, 192, 255, 96, 128, 192, 255, 96, 128, 192, 255,
+  ]),
+  4,
+  2,
+  THREE.RGBAFormat,
+);
+environmentTexture.colorSpace = THREE.SRGBColorSpace;
+environmentTexture.mapping = THREE.EquirectangularReflectionMapping;
+environmentTexture.needsUpdate = true;
+scene.environment = environmentTexture;
+const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
+directionalLight.position.set(2, 4, 3);
+directionalLight.castShadow = true;
+directionalLight.shadow.mapSize.set(256, 256);
+directionalLight.shadow.camera.near = 0.1;
+directionalLight.shadow.camera.far = 20;
+scene.add(directionalLight);
 const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
 camera.position.z = 4;
 camera.lookAt(0, 0, 0);
@@ -30,7 +50,23 @@ const line = new THREE.Line(
 const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66ff88 }));
 sprite.position.set(0, 1.4, 0);
 sprite.scale.setScalar(0.35);
-featureGroup.add(instanced, line, sprite);
+const batched = new THREE.BatchedMesh(
+  2,
+  128,
+  256,
+  new THREE.MeshStandardMaterial({ color: 0xaa66ff, roughness: 0.7 }),
+);
+const batchedGeometryId = batched.addGeometry(new THREE.BoxGeometry(0.3, 0.3, 0.3));
+const batchedInstanceId = batched.addInstance(batchedGeometryId);
+instanceMatrix.makeTranslation(0, -1.2, 0);
+batched.setMatrixAt(batchedInstanceId, instanceMatrix);
+featureGroup.add(instanced, line, sprite, batched);
+featureGroup.traverse((object) => {
+  if (object.isMesh || object.isBatchedMesh || object.isInstancedMesh) {
+    object.castShadow = true;
+    object.receiveShadow = true;
+  }
+});
 scene.add(featureGroup);
 
 globalThis.__gltfSmokeError = null;
@@ -39,9 +75,15 @@ globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
+globalThis.__gltfBatchedSmoke = false;
+globalThis.__gltfShadowSmoke = false;
+globalThis.__gltfEnvironmentSmoke = false;
+globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
+globalThis.__gltfSmokeReady = false;
+let smokeFrames = 0;
 window.addEventListener("resize", () => { globalThis.__gltfResizeEvent = window.innerWidth === 960 && window.innerHeight === 540; });
 globalThis.__gltfSmokeStage = "before-adapter";
 
@@ -101,10 +143,25 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   scene.add(gltf.scene);
   scene.add(externalGltf.scene);
   scene.add(glb.scene);
+  globalThis.__gltfEnvironmentSmoke = scene.environment === environmentTexture;
   globalThis.__gltfSmokeStage = "before-render";
+  const mrt = new THREE.RenderTarget(64, 64, { count: 2, depthBuffer: true });
+  renderer.setRenderTarget(mrt);
+  await renderer.renderAsync(scene, camera);
+  renderer.setRenderTarget(null);
+  globalThis.__gltfMrtSmoke = mrt.isRenderTarget === true && mrt.texture.length === 2;
   await renderer.renderAsync(scene, camera);
   globalThis.__gltfSmokeRendered = device !== null && renderer.isWebGPURenderer === true;
   globalThis.__gltfFeatureSmoke = instanced.isInstancedMesh && line.isLine && sprite.isSprite;
+  globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
+  globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
+  globalThis.__gltfSmokeReady = true;
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded ||
+      !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
+      !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
+      !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {
+    throw new Error("standard Three.js compatibility fixture assertions failed");
+  }
 }).catch((error) => {
   globalThis.__gltfSmokeError = `${globalThis.__gltfSmokeStage}: ${String(error.stack || error)}`;
 });
@@ -112,17 +169,11 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
 globalThis.HyperThreeGame = {
   update() {
     if (globalThis.__gltfSmokeError) throw new Error(globalThis.__gltfSmokeError.replace(/\n/g, " | "));
+    smokeFrames += 1;
+    if (smokeFrames > 180 && !globalThis.__gltfSmokeReady) throw new Error("standard Three.js compatibility fixture timed out");
   },
   onStart() {
     if (globalThis.__gltfSmokeError) throw new Error(globalThis.__gltfSmokeError.replace(/\n/g, " | "));
-    if (!globalThis.__gltfSmokeLoaded) throw new Error("GLTFLoader smoke did not settle");
-    if (!globalThis.__gltfExternalTexture) throw new Error("external texture smoke did not settle");
-    if (!globalThis.__gltfGlbLoaded) throw new Error("GLB smoke did not settle");
-    if (!globalThis.__gltfResizeEvent) throw new Error("native resize event did not settle");
-    if (!globalThis.__gltfFeatureSmoke) throw new Error("InstancedMesh/Line/Sprite smoke did not settle");
-    if (!globalThis.__gltfReadbackSmoke) throw new Error("GPUBuffer readback smoke did not settle");
-    if (!globalThis.__gltfResourceLifecycleSmoke) throw new Error("GPU resource lifecycle smoke did not settle");
-    if (!globalThis.__gltfSmokeRendered) throw new Error("GLTF WebGPU render smoke did not settle");
   },
   onStop() {},
 };

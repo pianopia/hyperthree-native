@@ -1230,9 +1230,15 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
 
     let is_three_loader_bundle =
         source.contains("GLTFLoader") || source.contains("THREE.GLTFLoader");
-    if (is_three_loader_bundle && normalize_boa_class_constructor_bindings(&mut normalized))
-        || normalized != source
-    {
+    let mut boa_changed = false;
+    if is_three_loader_bundle {
+        boa_changed = normalize_boa_class_constructor_bindings(&mut normalized);
+        if normalized.contains("let of=") {
+            normalized = normalized.replace("let of=", "var of=");
+            boa_changed = true;
+        }
+    }
+    if (is_three_loader_bundle && boa_changed) || normalized != source {
         std::borrow::Cow::Owned(normalized)
     } else {
         std::borrow::Cow::Borrowed(source)
@@ -1766,10 +1772,11 @@ mod tests {
 
     #[test]
     fn normalizes_boa_class_constructor_lexicals_only() {
-        let source = "/* GLTFLoader */ class Example{constructor(){const value=1;let other=2;this.value=value+other;}method(){const untouched=3;return untouched;}}";
+        let source = "/* GLTFLoader */ class Example{constructor(){const value=1;let other=2;this.value=value+other;}method(){const untouched=3;return untouched;}} let of='';";
         let normalized = normalize_three_compatibility_source(source);
         assert!(normalized.contains("constructor(){var value=1;var other=2;"));
         assert!(normalized.contains("method(){const untouched=3;"));
+        assert!(normalized.contains("var of='';"));
     }
 
     #[test]
