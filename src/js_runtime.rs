@@ -2326,6 +2326,22 @@ impl JsRuntime {
                   }
                 };
                 globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
+                globalThis.ImageData = globalThis.ImageData || class ImageData {
+                  constructor(dataOrWidth, widthOrHeight, height) {
+                    if (typeof dataOrWidth === 'number') {
+                      this.width = dataOrWidth;
+                      this.height = Number(widthOrHeight);
+                      this.data = new Uint8ClampedArray(this.width * this.height * 4);
+                    } else {
+                      this.data = new Uint8ClampedArray(dataOrWidth || 0);
+                      this.width = Number(widthOrHeight);
+                      this.height = height === undefined ? this.data.length / 4 / this.width : Number(height);
+                    }
+                    if (!Number.isInteger(this.width) || !Number.isInteger(this.height) || this.width <= 0 || this.height <= 0 || this.data.length !== this.width * this.height * 4) {
+                      throw new TypeError('ImageData dimensions do not match RGBA data');
+                    }
+                  }
+                };
                 globalThis.DOMException = globalThis.DOMException || class DOMException extends Error {
                   constructor(message = '', name = 'Error') { super(message); this.name = name; }
                 };
@@ -2335,7 +2351,9 @@ impl JsRuntime {
                   let cropWidth;
                   let cropHeight;
                   let options = {};
-                  if (args.length > 0 && typeof args[0] === 'object') {
+                  if (args.length === 0) {
+                    options = {};
+                  } else if (typeof args[0] === 'object') {
                     options = args[0] || {};
                   } else {
                     cropX = Number(args[0] || 0);
@@ -4686,6 +4704,7 @@ mod tests {
                 globalThis.__fetchProbe = false;
                 globalThis.__dataFetchProbe = '';
                 globalThis.__imageProbe = false;
+                globalThis.__imageDataProbe = false;
                 fetch("Cargo.toml")
                   .then(async (response) => {
                     const buffer = await response.arrayBuffer();
@@ -4701,13 +4720,15 @@ mod tests {
                   .then((blob) => createImageBitmap(blob, { resizeWidth: 2, resizeHeight: 2 }))
                   .then((bitmap) => {
                     globalThis.__imageProbe = bitmap.width === 2 && bitmap.height === 2 && bitmap.data.byteLength === 16;
-                  });
+                    return createImageBitmap(new ImageData(new Uint8ClampedArray([9, 19, 29, 255]), 1, 1));
+                  })
+                  .then((bitmap) => { globalThis.__imageDataProbe = bitmap.width === 1 && bitmap.data[1] === 19; });
                 "#,
             )
             .unwrap();
         runtime
             .execute_source(
-                "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi' || globalThis.__imageProbe !== true) throw new Error('fetch/image probe failed');",
+                "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi' || globalThis.__imageProbe !== true || globalThis.__imageDataProbe !== true) throw new Error('fetch/image probe failed');",
             )
             .unwrap();
     }

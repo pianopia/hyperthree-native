@@ -56,6 +56,7 @@
 - [x] WebGPU GPUBuffer/GPUTexture descriptor properties exposed to JavaScript and fixture-verified
 - [x] Native createImageBitmap decode coverage for JPEG/PNG/WebP/GIF/BMP/HDR/EXR/TIFF sources
 - [x] createImageBitmap crop/resize, flipY, premultiplied-alpha, and ImageBitmap-source compatibility
+- [x] ImageData RGBA source compatibility for createImageBitmap
 - [x] Native external RGBA frame import fallback, `externalTexture` bind-group compatibility, WGSL sampling normalization, and GPU readback fixture
 - [x] WebCodecs-compatible RGBA `VideoFrame` shape (`clone`, `copyTo`, `close`) and Three.js `VideoFrameTexture.setFrame()` fixture
 - [x] RGBA-backed `HTMLVideoElement` compatibility boundary with `play/pause`, `readyState`, and `requestVideoFrameCallback()` fixture

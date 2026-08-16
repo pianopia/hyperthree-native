@@ -4396,7 +4396,22 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   globalThis.HTMLImageElement = globalThis.HTMLImageElement || function HTMLImageElement() {};
   globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
   globalThis.VideoFrame = globalThis.VideoFrame || function VideoFrame() {};
-  globalThis.ImageData = globalThis.ImageData || function ImageData() {};
+  globalThis.ImageData = globalThis.ImageData || class ImageData {
+    constructor(dataOrWidth, widthOrHeight, height) {
+      if (typeof dataOrWidth === 'number') {
+        this.width = dataOrWidth;
+        this.height = Number(widthOrHeight);
+        this.data = new Uint8ClampedArray(this.width * this.height * 4);
+      } else {
+        this.data = new Uint8ClampedArray(dataOrWidth || 0);
+        this.width = Number(widthOrHeight);
+        this.height = height === undefined ? this.data.length / 4 / this.width : Number(height);
+      }
+      if (!Number.isInteger(this.width) || !Number.isInteger(this.height) || this.width <= 0 || this.height <= 0 || this.data.length !== this.width * this.height * 4) {
+        throw new TypeError('ImageData dimensions do not match RGBA data');
+      }
+    }
+  };
   globalThis.OffscreenCanvas = globalThis.OffscreenCanvas || function OffscreenCanvas() {};
   globalThis.GPUBufferUsage = globalThis.GPUBufferUsage || bufferUsage;
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || textureUsage;
