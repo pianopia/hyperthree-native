@@ -23,8 +23,10 @@
 - [x] Three.js Points to native billboard particle effect path
 - [x] Native WebGPU navigator/device resource smoke path (buffer, texture, shader module)
 - [x] WebGPU mapped buffer upload, native canvas/DOM shim, and WGSL compatibility normalization
+- [x] Boa/Three.js node-cache compatibility shim for standard WebGPURenderer initialization
 - [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
 - [x] Initial GPUCanvasContext and native swapchain presentation path
+- [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
 - [ ] glTF/KTX2 zero-copy texture decode and full material/animation GPU upload

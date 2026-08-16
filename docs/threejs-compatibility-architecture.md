@@ -62,9 +62,11 @@ JS GCとは独立して参照数と破棄を管理する。
 `GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadに加え、BindGroup、
 Pipeline、CommandEncoder、RenderPass、ComputePassのnative実行sliceを実装済みで
 ある。初期の`GPUCanvasContext.configure()`、`getCurrentTexture()`、native
-swapchainへのpresentまで接続済みである。次はresize/device-lost/present lifecycleを
-完成させ、Three.jsのWebGPURendererが通常のフレームループで生成したコマンドを
-そのまま画面へpresentする。
+swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが一時的に生成する
+`undefined`キーだけを隔離する互換層も追加し、Three.js 0.179の
+`WebGPURenderer.renderAsync()`をMeshStandardMaterial、DirectionalLight、Pointsを
+含むシーンでApple M4/Metal上に接続できることを確認した。次はresize/device-lost/
+present lifecycleを完成させ、未実装の標準WebGPU APIを段階的に埋める。
 
 ### Phase B: Three.js renderer実行
 

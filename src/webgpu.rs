@@ -53,6 +53,22 @@ struct CommandEncoderState {
 enum RecordedCommand {
     RenderPass(RenderPassState),
     ComputePass(ComputePassState),
+    CopyBufferToBuffer {
+        source: u64,
+        source_offset: u64,
+        destination: u64,
+        destination_offset: u64,
+        size: u64,
+    },
+    CopyTextureToTexture {
+        source: u64,
+        source_mip_level: u32,
+        source_origin: [u32; 3],
+        destination: u64,
+        destination_mip_level: u32,
+        destination_origin: [u32; 3],
+        size: [u32; 3],
+    },
 }
 
 #[derive(Debug)]
@@ -662,6 +678,56 @@ impl NativeWebGpuContext {
         Ok(id)
     }
 
+    fn get_render_pipeline_bind_group_layout(
+        &self,
+        pipeline_id: u64,
+        index: u32,
+    ) -> Result<u64, String> {
+        let layout = {
+            let resources = self
+                .resources
+                .lock()
+                .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+            resources
+                .render_pipelines
+                .get(&pipeline_id)
+                .ok_or_else(|| format!("unknown GPURenderPipeline handle {pipeline_id}"))?
+                .get_bind_group_layout(index)
+        };
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .bind_group_layouts
+            .insert(id, layout);
+        Ok(id)
+    }
+
+    fn get_compute_pipeline_bind_group_layout(
+        &self,
+        pipeline_id: u64,
+        index: u32,
+    ) -> Result<u64, String> {
+        let layout = {
+            let resources = self
+                .resources
+                .lock()
+                .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+            resources
+                .compute_pipelines
+                .get(&pipeline_id)
+                .ok_or_else(|| format!("unknown GPUComputePipeline handle {pipeline_id}"))?
+                .get_bind_group_layout(index)
+        };
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .bind_group_layouts
+            .insert(id, layout);
+        Ok(id)
+    }
+
     fn create_command_encoder(&self) -> Result<u64, String> {
         let id = self.allocate_id()?;
         self.resources
@@ -781,6 +847,63 @@ impl NativeWebGpuContext {
             )),
             None => Err(format!("unknown or ended GPUComputePass handle {pass_id}")),
         }
+    }
+
+    fn record_encoder_command(
+        &self,
+        encoder_id: u64,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
+        let command = match operation {
+            "copyBufferToBuffer" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "copyBufferToBuffer payload must be an array".to_string())?;
+                RecordedCommand::CopyBufferToBuffer {
+                    source: value_u64(values, 0)?,
+                    source_offset: value_u64_or(values, 1, 0)?,
+                    destination: value_u64(values, 2)?,
+                    destination_offset: value_u64_or(values, 3, 0)?,
+                    size: value_u64(values, 4)?,
+                }
+            }
+            "copyTextureToTexture" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "copyTextureToTexture payload must be an array".to_string())?;
+                let source = texture_copy_descriptor(values, 0)?;
+                let destination = texture_copy_descriptor(values, 1)?;
+                let size = values
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| "copy size must be an array".to_string())?;
+                RecordedCommand::CopyTextureToTexture {
+                    source: source.0,
+                    source_mip_level: source.1,
+                    source_origin: source.2,
+                    destination: destination.0,
+                    destination_mip_level: destination.1,
+                    destination_origin: destination.2,
+                    size: [
+                        value_u32(size, 0)?,
+                        value_u32_or(size, 1, 1)?,
+                        value_u32_or(size, 2, 1)?,
+                    ],
+                }
+            }
+            _ => return Err(format!("unsupported WebGPU encoder command {operation}")),
+        };
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let encoder = resources
+            .command_encoders
+            .get_mut(&encoder_id)
+            .ok_or_else(|| format!("unknown GPUCommandEncoder handle {encoder_id}"))?;
+        encoder.commands.push(command);
+        Ok(())
     }
 
     fn record_pass_command(
@@ -987,6 +1110,68 @@ impl NativeWebGpuContext {
                 }
                 RecordedCommand::ComputePass(pass) => {
                     encode_compute_pass(&mut encoder, &resources, pass)?;
+                }
+                RecordedCommand::CopyBufferToBuffer {
+                    source,
+                    source_offset,
+                    destination,
+                    destination_offset,
+                    size,
+                } => {
+                    let source_buffer = resources
+                        .buffers
+                        .get(&source)
+                        .ok_or_else(|| format!("unknown source GPUBuffer handle {source}"))?;
+                    let destination_buffer =
+                        resources.buffers.get(&destination).ok_or_else(|| {
+                            format!("unknown destination GPUBuffer handle {destination}")
+                        })?;
+                    encoder.copy_buffer_to_buffer(
+                        source_buffer,
+                        source_offset,
+                        destination_buffer,
+                        destination_offset,
+                        size,
+                    );
+                }
+                RecordedCommand::CopyTextureToTexture {
+                    source,
+                    source_mip_level,
+                    source_origin,
+                    destination,
+                    destination_mip_level,
+                    destination_origin,
+                    size,
+                } => {
+                    let source_texture = texture_resource(&resources, source)?;
+                    let destination_texture = texture_resource(&resources, destination)?;
+                    encoder.copy_texture_to_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: source_texture,
+                            mip_level: source_mip_level,
+                            origin: wgpu::Origin3d {
+                                x: source_origin[0],
+                                y: source_origin[1],
+                                z: source_origin[2],
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::ImageCopyTexture {
+                            texture: destination_texture,
+                            mip_level: destination_mip_level,
+                            origin: wgpu::Origin3d {
+                                x: destination_origin[0],
+                                y: destination_origin[1],
+                                z: destination_origin[2],
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: size[0],
+                            height: size[1],
+                            depth_or_array_layers: size[2],
+                        },
+                    );
                 }
             }
         }
@@ -1218,6 +1403,36 @@ pub fn register_bindings(
         |gpu, descriptor| gpu.create_compute_pipeline(descriptor),
     )?;
 
+    let render_layout_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuGetRenderPipelineBindGroupLayout",
+        2,
+        move |_this, args, context| {
+            let pipeline_id = number_arg(args, 0, context)? as u64;
+            let index = number_arg(args, 1, context)? as u32;
+            render_layout_gpu
+                .get_render_pipeline_bind_group_layout(pipeline_id, index)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let compute_layout_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuGetComputePipelineBindGroupLayout",
+        2,
+        move |_this, args, context| {
+            let pipeline_id = number_arg(args, 0, context)? as u64;
+            let index = number_arg(args, 1, context)? as u32;
+            compute_layout_gpu
+                .get_compute_pipeline_bind_group_layout(pipeline_id, index)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
     let encoder_gpu = gpu.clone();
     register(
         context,
@@ -1271,6 +1486,22 @@ pub fn register_bindings(
             let payload = json_arg(args, 2, context)?;
             pass_command_gpu
                 .record_pass_command(pass_id, &operation, &payload)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let encoder_command_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuEncoderCommand",
+        3,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            let operation = string_arg(args, 1, context)?;
+            let payload = json_arg(args, 2, context)?;
+            encoder_command_gpu
+                .record_encoder_command(encoder_id, &operation, &payload)
                 .map(|_| JsValue::undefined())
                 .map_err(native_error)
         },
@@ -1390,6 +1621,47 @@ fn collect_surface_texture_ids(commands: &[RecordedCommand], resources: &Resourc
         }
     }
     ids
+}
+
+fn texture_resource(resources: &Resources, id: u64) -> Result<&wgpu::Texture, String> {
+    if let Some(texture) = resources.textures.get(&id) {
+        return Ok(texture);
+    }
+    resources
+        .surface_textures
+        .get(&id)
+        .map(|surface_texture| &surface_texture.texture)
+        .ok_or_else(|| format!("unknown GPUTexture handle {id}"))
+}
+
+fn texture_copy_descriptor(values: &[Value], index: usize) -> Result<(u64, u32, [u32; 3]), String> {
+    let descriptor = values
+        .get(index)
+        .and_then(Value::as_object)
+        .ok_or_else(|| "texture copy descriptor must be an object".to_string())?;
+    let origin = descriptor
+        .get("origin")
+        .and_then(Value::as_array)
+        .map(|origin| {
+            Ok::<[u32; 3], String>([
+                value_u32(origin, 0)?,
+                value_u32_or(origin, 1, 0)?,
+                value_u32_or(origin, 2, 0)?,
+            ])
+        })
+        .transpose()?
+        .unwrap_or([0, 0, 0]);
+    Ok((
+        descriptor
+            .get("texture")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "texture copy descriptor has no texture handle".to_string())?,
+        descriptor
+            .get("mipLevel")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        origin,
+    ))
 }
 
 fn collect_surface_texture_id(view_id: u64, resources: &Resources, ids: &mut Vec<u64>) {
@@ -2232,6 +2504,37 @@ fn texture_format(format: &str) -> wgpu::TextureFormat {
 const WEBGPU_BOOTSTRAP: &str = r#"
 (() => {
   if (globalThis.navigator?.gpu) return;
+  // Three.js' node-cache can transiently use an undefined chain key while
+  // nested node graphs are being compiled. Browsers reject that key, but Boa
+  // otherwise aborts the whole renderer initialization. Preserve native
+  // WeakMap behavior for object keys and isolate this embedded-runtime quirk
+  // to the undefined-key slot.
+  const NativeWeakMap = globalThis.WeakMap;
+  class HyperThreeWeakMap {
+    constructor(entries) {
+      this.__native = new NativeWeakMap();
+      this.__undefined = undefined;
+      this.__hasUndefined = false;
+      if (entries) for (const entry of entries) this.set(entry[0], entry[1]);
+    }
+    get(key) { return key === undefined ? this.__undefined : this.__native.get(key); }
+    has(key) { return key === undefined ? this.__hasUndefined : this.__native.has(key); }
+    set(key, value) {
+      if (key === undefined) { this.__undefined = value; this.__hasUndefined = true; }
+      else this.__native.set(key, value);
+      return this;
+    }
+    delete(key) {
+      if (key === undefined) {
+        const existed = this.__hasUndefined;
+        this.__undefined = undefined;
+        this.__hasUndefined = false;
+        return existed;
+      }
+      return this.__native.delete(key);
+    }
+  }
+  globalThis.WeakMap = HyperThreeWeakMap;
   const makeHandle = (id, methods = {}) => Object.assign({ __hyperthreeHandle: id }, methods);
   const handleId = value => value?.__hyperthreeHandle ?? value;
   const descriptorJson = value => JSON.stringify(value ?? {});
@@ -2376,6 +2679,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         __hyperthreeWebGpuWriteTexture(destination.texture.__hyperthreeHandle, size.width, size.height, bytes);
       },
       submit(commandBuffers) { __hyperthreeWebGpuSubmit(JSON.stringify((commandBuffers ?? []).map(handleId))); },
+      onSubmittedWorkDone: async () => {},
     };
     const device = {
       queue,
@@ -2405,7 +2709,9 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       },
       createRenderPipeline(descriptor = {}) {
         const id = __hyperthreeWebGpuCreateRenderPipeline(descriptorJson(normalizePipelineDescriptor(descriptor)));
-        return makeHandle(id, { getBindGroupLayout: () => makeHandle(0) });
+        return makeHandle(id, {
+          getBindGroupLayout: (index = 0) => makeHandle(__hyperthreeWebGpuGetRenderPipelineBindGroupLayout(id, index)),
+        });
       },
       createRenderPipelineAsync: async (descriptor = {}) => device.createRenderPipeline(descriptor),
       createComputePipeline(descriptor = {}) {
@@ -2416,7 +2722,10 @@ const WEBGPU_BOOTSTRAP: &str = r#"
             entryPoint: descriptor.compute?.entryPoint ?? 'main',
           },
         };
-        return makeHandle(__hyperthreeWebGpuCreateComputePipeline(descriptorJson(normalized)));
+        const id = __hyperthreeWebGpuCreateComputePipeline(descriptorJson(normalized));
+        return makeHandle(id, {
+          getBindGroupLayout: (index = 0) => makeHandle(__hyperthreeWebGpuGetComputePipelineBindGroupLayout(id, index)),
+        });
       },
       createComputePipelineAsync: async (descriptor = {}) => device.createComputePipeline(descriptor),
       createCommandEncoder() {
@@ -2429,8 +2738,22 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           beginComputePass() {
             return makePass(__hyperthreeWebGpuBeginComputePass(encoderId));
           },
-          copyBufferToBuffer() {},
-          copyTextureToTexture() {},
+          copyBufferToBuffer(source, sourceOffset, destination, destinationOffset, size) {
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'copyBufferToBuffer', JSON.stringify([
+              handleId(source), sourceOffset ?? 0, handleId(destination), destinationOffset ?? 0, size,
+            ]));
+          },
+          copyTextureToTexture(source, destination, size) {
+            const normalizeCopy = value => ({
+              texture: handleId(value.texture),
+              mipLevel: value.mipLevel ?? 0,
+              origin: Array.isArray(value.origin) ? value.origin : [value.origin?.x ?? 0, value.origin?.y ?? 0, value.origin?.z ?? 0],
+            });
+            const normalizedSize = Array.isArray(size) ? size : [size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1];
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'copyTextureToTexture', JSON.stringify([
+              normalizeCopy(source), normalizeCopy(destination), normalizedSize,
+            ]));
+          },
           finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },
         });
       },
@@ -2478,3 +2801,18 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   };
 })();
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_wgsl;
+
+    #[test]
+    fn removes_unsupported_wgsl_diagnostic_directives() {
+        let source = "diagnostic(off, derivative_uniformity);\n@compute @workgroup_size(1) fn main() {}\n  diagnostic(on, foo);";
+
+        assert_eq!(
+            sanitize_wgsl(source),
+            "@compute @workgroup_size(1) fn main() {}"
+        );
+    }
+}
