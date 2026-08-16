@@ -1,0 +1,110 @@
+# HyperThree Native roadmap
+
+## Runtime
+
+- [x] Native Rust host and wgpu surface prototype
+- [x] AI-friendly project manifest and Vite bundle import path
+- [x] JavaScript-to-native camera/mesh/material bridge
+- [ ] macOS Metal, Windows DirectX 12/Vulkan, Linux Vulkan/software CI matrix
+- [x] Cross-platform CI skeleton and headless GPU backend diagnostics
+- [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
+- [x] Native mouse position/button input and perspective/orthographic camera sync
+- [x] Per-monitor scale-factor propagation from native physical pixels to CSS canvas metrics
+- [x] Native keyboard/mouse/pointer/wheel/touch events with modifier and click dispatch
+- [x] Native Pointer Lock API bridge with winit cursor grab and pointerlockchange lifecycle
+- [x] Native Fullscreen API bridge with winit borderless fullscreen and fullscreenchange lifecycle
+- [x] Project-relative mmap asset API and glTF/GLB metadata inspection
+- [x] Native glTF/GLB POSITION/index decode and cached GPU geometry upload
+- [x] Boa ES module execution with relative and `node_modules` resolution
+- [x] Native `performance.now()` and requestAnimationFrame compatibility loop
+- [x] Native Web Audio decode/playback bridge, AudioContext/Gain/Panner/BiquadFilter graph, dynamic filter parameter propagation, playback-rate/detune, spatial sink position, and Blob/File/object-URL asset boundary
+- [x] Native AudioAnalyser FFT/time-domain tap, AudioContext-close cleanup, and Three.js AudioAnalyser fixture
+- [x] Project-sandboxed localStorage/sessionStorage with restart persistence
+- [x] Origin-private File System Access API slice (navigator.storage.getDirectory, file handles, writable streams, listing, removal)
+- [ ] Cross-platform audio-device/spatial-DSP validation
+- [ ] Embedded V8 isolate and module/runtime compatibility
+- [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry
+- [x] Three.js position/index BufferGeometry registration and native GPU draw path
+- [x] BufferGeometry UV attributes and glTF base-color RGBA8 texture upload/draw path
+- [x] Native direct-light PBR pass with normals, metalness, roughness, and emissive
+- [x] Three.js matrixWorld transport for animated object transforms
+- [x] Three.js Points to native billboard particle effect path
+- [x] Native WebGPU navigator/device resource smoke path (buffer, texture, shader module)
+- [x] WebGPU mapped buffer upload, native canvas/DOM shim, and WGSL compatibility normalization
+- [x] Boa/Three.js node-cache compatibility shim for standard WebGPURenderer initialization
+- [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
+- [x] Native pipeline-derived bind group layouts and GPU buffer/texture copy commands
+- [x] WebGPU texture arrays, mip/sample descriptors, view descriptors, and typed upload layout
+- [x] Initial GPUCanvasContext configure/unconfigure and native swapchain presentation path
+- [x] Project-relative fetch/Request/Response/Headers and ArrayBuffer/TextDecoder asset boundary
+- [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
+- [x] AI project scaffold using standard WebGPURenderer with native canvas, resize, and MSAA pipeline state
+- [x] Three.js 0.179 AnimationMixer transform and morph-target shader smoke on native Metal
+- [x] Three.js 0.179 SkinnedMesh/Skeleton and bone-transform AnimationMixer smoke on native Metal
+- [x] Three.js 0.179 MeshStandardNodeMaterial/MeshPhysicalNodeMaterial (normal map, clearcoat, transmission), TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal
+- [x] Three.js 0.179 GLTFLoader embedded-buffer SkinnedMesh/Skeleton/AnimationMixer/WebGPU fixture
+- [x] Three.js 0.179 GLTFLoader GLB, external-buffer, external-PNG texture, and canvas-resize fixture
+- [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
+- [x] Three.js WebGPURenderer PBR/effect render-target pixel readback fixture
+- [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
+- [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
+- [x] WebGPU timestamp-query feature negotiation, pass/external writes, resolve, and conditional native readback fixture
+- [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
+- [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
+- [x] WebGPU device/adapter limits exposure and queue onSubmittedWorkDone synchronization
+- [x] WebGPU requestAdapter/requestDevice options, required-feature validation, adapter info boundary, and unsupported-feature fixture assertion
+- [x] WebGPU storage-buffer ComputePass dispatch and MAP_READ readback fixture
+- [x] WebGPU standard r/rg/rgba, HDR packed, depth/stencil texture format mapping and optional feature negotiation
+- [x] WebGPU GPUBuffer/GPUTexture descriptor properties exposed to JavaScript and fixture-verified
+- [x] Native createImageBitmap decode coverage for JPEG/PNG/WebP/GIF/BMP/HDR/EXR/TIFF sources
+- [x] createImageBitmap crop/resize, flipY, premultiplied-alpha, and ImageBitmap-source compatibility
+- [x] ImageData RGBA source compatibility for createImageBitmap
+- [x] Native HTMLImageElement/TextureLoader RGBA loading and WebGPU upload fixture
+- [x] CubeTextureLoader six-face image loading, native layered upload, and cube background fixture
+- [x] Three.js Data3DTexture upload, 3D texture view, and TSL texture3D sampling fixture
+- [x] Three.js DataArrayTexture layered upload/view and TSL depth sampling fixture
+- [x] Native external RGBA frame import fallback, `externalTexture` bind-group compatibility, WGSL sampling normalization, and GPU readback fixture
+- [x] WebCodecs-compatible RGBA `VideoFrame` shape (`clone`, `copyTo`, `close`) and Three.js `VideoFrameTexture.setFrame()` fixture
+- [x] RGBA-backed `HTMLVideoElement` compatibility boundary with `play/pause`, `readyState`, and `requestVideoFrameCallback()` fixture
+- [x] Animated GIF multi-frame decode with per-frame delays and `HTMLVideoElement` frame scheduling
+- [x] Animated image `currentTime`/`fastSeek()` random-seek frame selection fixture
+- [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
+- [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
+- [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration
+- [x] Manifest-driven transparent native window, premultiplied surface selection, and `GPUCanvasContext.getConfiguration()` alpha reporting
+- [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
+- [x] Native AssetStore `EXT_meshopt_compression` attribute/triangle/index-sequence decode with filters
+- [ ] Complete canvas resize/device-loss/present lifecycle and transparent alpha fidelity for Three.js WebGPURenderer
+- [x] Three.js WebGPU compressed texture format negotiation and mip-level uploads
+- [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
+- [x] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
+- [x] Standard KTX2Loader raw BC1 path through KHR_texture_basisu and native GPU upload
+- [x] Native BasisLZ/UASTC transcoder binding with KTX2Loader bridge and compressed/uncompressed target selection
+- [x] Native raw KTX2 mip/face transfer without a browser Worker
+- [x] UASTC KTX2 end-to-end fixture for RGBA32 and BC7 target paths
+- [ ] UASTC target matrix across ASTC/BC3/BC1/ETC2 on Windows/Linux GPU backends
+- [x] DRACO native mesh decode through standard GLTFLoader/DRACOLoader with Khronos Box fixture
+- [x] DRACO native decoder hook at preload/init/decodeGeometry boundaries, resilient to Vite minification and Worker absence
+- [x] DRACO native geometry dispatcher with sequential index shape and Point Cloud marker for standalone consumers
+- [x] DRACO bitstream 2.3 Point Cloud decode with position/color official fixture
+- [x] DRACO all decoded attribute channels, unique-ID remapping for glTF custom attributes, and Point Cloud index omission in the standard loader bridge
+- [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
+- [x] GPU-driven culling with compute-generated indirect draw fixture
+- [ ] Large-scene GPU-driven rendering benchmark suite
+- [ ] Signed installers and release update channels for all three platforms
+
+## Commerce
+
+- [ ] Creator identity and Connected Account onboarding
+- [ ] Catalog, immutable game releases, and platform compatibility metadata
+- [ ] Checkout, entitlements, refunds, disputes, and idempotent webhooks
+- [ ] Versioned platform fee schedule and settlement ledger
+- [ ] Creator earnings/payout dashboard
+- [ ] Platform admin/reconciliation dashboard
+- [ ] Express Dashboard MVP, followed by embedded Connect components
+- [ ] Tax, KYC/AML, merchant-of-record, negative-balance, and refund policy review
+- [ ] Test-mode pilot, restricted live pilot, and staged public launch
+
+The cross-platform runtime plan is in
+[`docs/platform-support.md`](platform-support.md). The commerce design is in
+[`docs/commerce-connect-plan.md`](commerce-connect-plan.md).

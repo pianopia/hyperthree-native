@@ -6,12 +6,46 @@ architecture specification.
 | Specification concern | Current implementation | Next increment |
 | --- | --- | --- |
 | Native host / direct swapchain | `src/renderer.rs` creates a native `winit` window and a `wgpu` surface | platform-specific Vulkan / Metal / DirectX validation |
-| JS execution outside a browser | `src/js_runtime.rs` evaluates the entry script in an embeddable runtime | replace the adapter with Embedded V8 and expose the isolate lifecycle |
-| Zero-copy asset path | `src/asset.rs` maps binary files with `memmap2` | native glTF / KTX2 decoder and direct GPU upload |
-| Three.js compatibility seam | `js/three-bridge.js` defines the browser-free native contract | bind WebGPU objects and run the Three.js WebGPU backend |
+| JS execution outside a browser | `src/js_runtime.rs` runs embedded Boa scripts and ES modules with project-relative/`node_modules`/`exports` resolution, native `performance.now()`, RAF scheduling, window-global aliases, project-relative/data/blob URL `fetch`, `Request`/`Response`/`Blob`/`File`/`URL.createObjectURL`, project-sandboxed persistent `localStorage`/in-memory `sessionStorage`, origin-private `navigator.storage.getDirectory()` file handles with writable streams/listing/removal, `ArrayBuffer`/`TextDecoder`/`createImageBitmap`, native RGBA `HTMLImageElement`/`TextureLoader` loading, an RGBA-backed `HTMLVideoElement`/`VideoFrame` frame boundary with `requestVideoFrameCallback()`, a native Web Audio decode/playback bridge (`AudioContext`, `AudioBuffer`, `AudioBufferSourceNode`, `GainNode`, spatial `PannerNode` position graph with playback-rate/detune propagation, BiquadFilterNode chains rendered through native PCM biquads with dynamic parameter propagation, and AnalyserNode FFT/time-domain reads fed from the native playback tap with explicit AudioContext-close cleanup), and an opt-in `navigator.gpu` resource binding; the WebGPU shim includes mapped buffer upload, native canvas/DOM types, WGSL diagnostic compatibility, Three.js node-cache compatibility, navigator metadata, console compatibility, device-lost Promise delivery, native error scopes, compressed texture feature negotiation, and mip-level-aware texture uploads | Embedded V8 isolate, broader Node/Web API compatibility, native video codecs, broader Web Audio DSP, and user-mediated picker APIs |
+| Asset path | `src/asset.rs` memory-maps project-relative files, inspects glTF/GLB metadata, decodes POSITION/index/UV primitives, EXT_meshopt-compressed views, and base-color images natively; the standard GLTFLoader path verifies native raw BC1 KTX2 level transfer, BasisLZ/UASTC (RGBA32/BC7 target) transcoding, and Khronos Box `KHR_draco_mesh_compression` decode through DRACOLoader | ASTC/BC3/BC1/ETC2 target matrix fixtures, complete Draco attribute/point-cloud/standalone API coverage, and full material/animation streaming |
+| JS-to-native render bridge | `src/bridge.rs` and `js/three-bridge.js` now carry position/normal/UV geometry, PBR material parameters, directional light, `matrixWorld`, and `Points` particles into native PBR/billboard passes; `src/webgpu.rs` creates native resources, derives pipeline bind-group layouts, executes WebGPU bind-group/pipeline/render/compute/copy commands, supports render bundles, texture view descriptors, typed and compressed texture uploads across mip levels, GPUBuffer MAP_READ readback, GPUQuerySet occlusion/resolve, texture/sampler destruction, device-lost signaling, native surface-texture discard, Lost/Outdated surface reconfiguration, `GPUCanvasContext.configure()`/`unconfigure()` and presents a canvas texture through the native surface; the host recreates the device/Renderer/JS session at the next frame boundary after loss | Complete renderer bindings, timestamp/pipeline-query coverage, alpha/presentation fidelity, and full canvas device-loss/present semantics |
+| Three.js compatibility seam | `syncThreeScene(scene, camera)` remains a migration bridge, while standard Three.js 0.179 `WebGPURenderer.renderAsync()` has been smoke-tested with PBR/light/Points, NodeMaterial/TSL/PostProcessing/Bloom, AnimationMixer transform/morph paths, GLTFLoader embedded/external/GLB assets with PNG textures, InstancedMesh/BatchedMesh/Line/Sprite, shadows, environment, MRT, indirect draw with GPU readback, and canvas resize propagation on native Metal; device-lost and native error-scope bindings are also connected | complete WebGPU renderer/object/material/asset coverage |
 | GPU-driven rendering | renderer owns the native render pass | compute culling, indirect draw buffers, and instancing benchmark |
+| Distribution and monetization | roadmap and commerce design are documented separately | cross-platform packaging, Connect onboarding, checkout, ledger, payouts, and dashboards |
 
 The project deliberately keeps the JS, asset, and graphics layers independent.
 That makes the expensive V8 and native decoder work incremental instead of
 coupling it to window bring-up.
 
+The native `GPUCanvasContext` now follows the standard lifecycle used by
+Three.js' `WebGPURenderer`: `configure()` validates the requested format and
+alpha mode against the native surface, `getCurrentTexture()` is rejected until
+configuration exists, and `unconfigure()` releases only swapchain textures and
+their views. Lost/Outdated acquisition retries native surface configuration.
+Projects can set `window.transparent = true` in `hyperthree.toml`; the host then
+creates a transparent native window when the platform supports it, chooses a
+premultiplied surface mode when available, and exposes the effective mode through
+`GPUCanvasContext.getConfiguration()`.
+On surfaces that expose opaque composition only, a premultiplied request is
+accepted as an opaque presentation fallback; transparent canvas composition is
+therefore not yet pixel-equivalent on those platforms.
+
+The current bridge is intentionally a migration layer, not the final compatibility
+boundary. A game can call
+`HyperThreeNative.setClearColor()`, `setCamera()`, `beginFrame()`, and
+`pushCube()`; the native host invokes `HyperThreeGame.update(deltaSeconds)` on
+each frame and consumes the resulting instance list. `isKeyDown()` exposes
+physical keyboard state, while optional `onStart()` and `onStop()` callbacks
+cover host lifecycle edges. `syncThreeScene(scene, camera)` provides the first
+scene-derived compatibility path for box, plane, sphere, and arbitrary
+position/index BufferGeometry primitives. `loadAsset(path)` retains the mapped
+asset in the native store while returning format and glTF metadata, while
+`drawAsset(path, meshIndex, primitiveIndex, options)` decodes a glTF/GLB
+primitive natively and uploads it to the cached native geometry, PBR material,
+and base-color texture paths. The initial standard WebGPU resource and command
+binding is now available for offscreen native GPU work. The next architectural
+step is the complete canvas lifecycle and broader standard WebGPU object
+binding described in
+[`docs/threejs-compatibility-architecture.md`](threejs-compatibility-architecture.md);
+the current bridge is not yet a complete Three.js WebGPURenderer integration,
+skinning/animation runtime, or effects pipeline.

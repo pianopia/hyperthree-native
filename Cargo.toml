@@ -7,14 +7,22 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
+basisu = "0.1.0"
 boa_engine = "0.21"
 bytemuck = { version = "1.16", features = ["derive"] }
 clap = { version = "4.5", features = ["derive"] }
+draco-oxide-core = "0.1.0-alpha.9"
+draco-oxide-decoder = { version = "0.1.0-alpha.9", features = ["point-cloud"] }
 env_logger = "0.11"
+gltf = { version = "1.4", features = ["extensions"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "exr", "gif", "hdr", "jpeg", "png", "tiff", "webp"] }
 log = "0.4"
 memmap2 = "0.9"
+meshopt-rs = { version = "0.1.2", features = ["experimental"] }
 pollster = "0.3"
+rodio = { version = "0.19", default-features = true }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
 wgpu = "0.20"
 winit = "0.29"
