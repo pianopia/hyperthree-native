@@ -1097,6 +1097,28 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register audio speed binding: {error}"))?;
 
+        let audio_engine_for_filter = audio_engine.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioSetFilter"), 7, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let playback_id = geometry_id_arg(args, 0, context)?;
+                    let filter_id = geometry_id_arg(args, 1, context)?;
+                    let filter = AudioFilter {
+                        id: filter_id,
+                        kind: string_arg(args, 2, context)?,
+                        frequency: number_arg(args, 3, context)? as f32,
+                        q: number_arg(args, 4, context)? as f32,
+                        gain: number_arg(args, 5, context)? as f32,
+                        detune: number_arg(args, 6, context)? as f32,
+                    };
+                    audio_engine_for_filter
+                        .borrow_mut()
+                        .set_filter(playback_id, filter_id, filter);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register audio filter binding: {error}"))?;
+
         let audio_engine_for_analyser_create = audio_engine.clone();
         context
             .register_global_builtin_callable(
@@ -1864,6 +1886,7 @@ impl JsRuntime {
                   for (let depth = 0; depth < 16 && current; depth += 1) {
                     if (current.gain?.value !== undefined && !current.__hyperthreeBiquadFilter) volume *= Number(current.gain.value);
                     if (current.__hyperthreeBiquadFilter) filters.push({
+                      id: current.__hyperthreeFilterId,
                       type: current.type,
                       frequency: Number(current.frequency.value),
                       q: Number(current.Q.value),
@@ -1893,15 +1916,38 @@ impl JsRuntime {
                     });
                   }
                 };
+                globalThis.__hyperthreeAudioFilterId = globalThis.__hyperthreeAudioFilterId || 0;
                 globalThis.BiquadFilterNode = globalThis.BiquadFilterNode || class BiquadFilterNode extends AudioNode {
                   constructor(context) {
                     super(context);
                     this.__hyperthreeBiquadFilter = true;
-                    this.type = 'lowpass';
-                    this.frequency = makeAudioParam(this, 350);
-                    this.detune = makeAudioParam(this, 0);
-                    this.Q = makeAudioParam(this, 1);
-                    this.gain = makeAudioParam(this, 0);
+                    this.__hyperthreeFilterId = ++globalThis.__hyperthreeAudioFilterId;
+                    this.__hyperthreeSourceIds = [];
+                    this._type = 'lowpass';
+                    const updateFilter = () => {
+                      for (const id of this.__hyperthreeSourceIds) __hyperthreeAudioSetFilter(
+                        id,
+                        this.__hyperthreeFilterId,
+                        this.type,
+                        this.frequency.value,
+                        this.Q.value,
+                        this.gain.value,
+                        this.detune.value,
+                      );
+                    };
+                    Object.defineProperty(this, 'type', {
+                      get: () => this._type,
+                      set: (value) => { this._type = String(value); updateFilter(); },
+                    });
+                    this.frequency = makeAudioParam(this, 350, updateFilter);
+                    this.detune = makeAudioParam(this, 0, updateFilter);
+                    this.Q = makeAudioParam(this, 1, updateFilter);
+                    this.gain = makeAudioParam(this, 0, updateFilter);
+                    this.__hyperthreeUpdateFilter = updateFilter;
+                  }
+                  __hyperthreeRegisterSource(id) {
+                    if (!this.__hyperthreeSourceIds.includes(id)) this.__hyperthreeSourceIds.push(id);
+                    this.__hyperthreeUpdateFilter();
                   }
                 };
                 globalThis.AnalyserNode = globalThis.AnalyserNode || class AnalyserNode extends AudioNode {

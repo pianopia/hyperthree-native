@@ -33,6 +33,8 @@ pub struct AudioPlayback {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AudioFilter {
+    #[serde(default)]
+    pub id: u64,
     #[serde(rename = "type")]
     pub kind: String,
     pub frequency: f32,
@@ -233,6 +235,7 @@ pub struct AudioEngine {
     output_stream: Option<OutputStream>,
     output_handle: Option<OutputStreamHandle>,
     sinks: HashMap<u64, SpatialSink>,
+    active_filters: HashMap<u64, HashMap<u64, Arc<Mutex<AudioFilter>>>>,
     analysers: HashMap<u64, Arc<Mutex<AnalyserState>>>,
     listener_position: [f32; 3],
     next_id: u64,
@@ -245,6 +248,7 @@ impl Default for AudioEngine {
             output_stream: None,
             output_handle: None,
             sinks: HashMap::new(),
+            active_filters: HashMap::new(),
             analysers: HashMap::new(),
             listener_position: [0.0, 0.0, 0.0],
             next_id: 1,
@@ -290,38 +294,60 @@ impl AudioEngine {
             .iter()
             .filter_map(|id| self.analysers.get(id).cloned())
             .collect::<Vec<_>>();
+        let filter_params = playback
+            .filters
+            .iter()
+            .cloned()
+            .map(|filter| Arc::new(Mutex::new(filter)))
+            .collect::<Vec<_>>();
+        let active_filters = playback
+            .filters
+            .iter()
+            .zip(&filter_params)
+            .filter_map(|(filter, params)| (filter.id != 0).then_some((filter.id, params.clone())))
+            .collect::<HashMap<_, _>>();
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        if !active_filters.is_empty() {
+            self.active_filters.insert(id, active_filters);
+        }
         let source_bytes = Cursor::new(bytes);
         if playback.looped {
+            let decoder = Decoder::new_looped(source_bytes).map_err(|error| {
+                self.active_filters.remove(&id);
+                anyhow!("failed to decode looped audio: {error}")
+            })?;
             append_source(
                 &sink,
-                Decoder::new_looped(source_bytes)
-                    .map_err(|error| anyhow!("failed to decode looped audio: {error}"))?,
+                decoder,
                 playback.when,
                 playback.offset,
                 playback.duration,
-                &playback.filters,
+                &filter_params,
                 &analyser_taps,
             );
         } else {
+            let decoder = Decoder::new(source_bytes).map_err(|error| {
+                self.active_filters.remove(&id);
+                anyhow!("failed to decode audio source: {error}")
+            })?;
             append_source(
                 &sink,
-                Decoder::new(source_bytes)
-                    .map_err(|error| anyhow!("failed to decode audio source: {error}"))?,
+                decoder,
                 playback.when,
                 playback.offset,
                 playback.duration,
-                &playback.filters,
+                &filter_params,
                 &analyser_taps,
             );
         }
         sink.play();
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
         self.sinks.insert(id, sink);
         Ok(id)
     }
 
     pub fn stop(&mut self, id: u64) {
+        self.active_filters.remove(&id);
         if let Some(sink) = self.sinks.remove(&id) {
             sink.stop();
         }
@@ -348,6 +374,16 @@ impl AudioEngine {
     pub fn set_speed(&mut self, id: u64, speed: f32) {
         if let Some(sink) = self.sinks.get(&id) {
             sink.set_speed(sanitize_speed(speed));
+        }
+    }
+
+    pub fn set_filter(&mut self, playback_id: u64, filter_id: u64, filter: AudioFilter) {
+        if let Some(filters) = self.active_filters.get(&playback_id) {
+            if let Some(params) = filters.get(&filter_id) {
+                if let Ok(mut params) = params.lock() {
+                    *params = filter;
+                }
+            }
         }
     }
 
@@ -418,7 +454,7 @@ fn append_source<S>(
     when: f64,
     offset: f64,
     duration: f64,
-    filters: &[AudioFilter],
+    filters: &[Arc<Mutex<AudioFilter>>],
     analysers: &[Arc<Mutex<AnalyserState>>],
 ) where
     S: Source<Item = i16> + Send + 'static,
@@ -430,14 +466,14 @@ fn append_source<S>(
     } else {
         Duration::MAX
     };
-    let source = FilterSource::new(source.convert_samples::<f32>(), filters);
+    let source = FilterSource::new_with_params(source.convert_samples::<f32>(), filters);
     let source = source.delay(delay).skip_duration(skip).take_duration(take);
     sink.append(AnalyserTap::new(source, analysers));
 }
 
 struct FilterSource<S> {
     input: S,
-    filters: Vec<Biquad>,
+    filters: Vec<DynamicBiquad>,
     channel: usize,
     channels: usize,
 }
@@ -446,12 +482,22 @@ impl<S> FilterSource<S>
 where
     S: Source<Item = f32>,
 {
+    #[cfg(test)]
     fn new(input: S, filters: &[AudioFilter]) -> Self {
+        let filter_params = filters
+            .iter()
+            .cloned()
+            .map(|filter| Arc::new(Mutex::new(filter)))
+            .collect::<Vec<_>>();
+        Self::new_with_params(input, &filter_params)
+    }
+
+    fn new_with_params(input: S, filter_params: &[Arc<Mutex<AudioFilter>>]) -> Self {
         let channels = input.channels().max(1) as usize;
         let sample_rate = input.sample_rate();
-        let filters = filters
+        let filters = filter_params
             .iter()
-            .filter_map(|filter| Biquad::new(filter, sample_rate, channels))
+            .filter_map(|params| DynamicBiquad::new(params.clone(), sample_rate, channels))
             .collect();
         Self {
             input,
@@ -482,6 +528,82 @@ where
         }
         self.channel = (self.channel + 1) % self.channels;
         Some(sample)
+    }
+}
+
+struct DynamicBiquad {
+    params: Arc<Mutex<AudioFilter>>,
+    sample_rate: u32,
+    signature: Option<FilterSignature>,
+    biquad: Option<Biquad>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct FilterSignature {
+    kind: &'static str,
+    frequency: u32,
+    q: u32,
+    gain: u32,
+    detune: u32,
+}
+
+impl DynamicBiquad {
+    fn new(params: Arc<Mutex<AudioFilter>>, sample_rate: u32, channels: usize) -> Option<Self> {
+        let filter = params.lock().ok()?.clone();
+        let signature = filter_signature(&filter);
+        let biquad = Biquad::new(&filter, sample_rate, channels);
+        biquad.as_ref()?;
+        Some(Self {
+            params,
+            sample_rate,
+            signature: Some(signature),
+            biquad,
+        })
+    }
+
+    fn process(&mut self, channel: usize, sample: f32) -> f32 {
+        if let Ok(filter) = self.params.lock() {
+            let signature = filter_signature(&filter);
+            if self.signature != Some(signature) {
+                if let Some(previous) = self.biquad.as_ref() {
+                    let channels = previous.x1.len();
+                    if let Some(updated) = Biquad::new(&filter, self.sample_rate, channels) {
+                        self.biquad = Some(updated);
+                    }
+                }
+                self.signature = Some(signature);
+            }
+        }
+        self.biquad
+            .as_mut()
+            .map(|biquad| biquad.process(channel, sample))
+            .unwrap_or(sample)
+    }
+
+    fn reset(&mut self) {
+        if let Some(biquad) = &mut self.biquad {
+            biquad.reset();
+        }
+    }
+}
+
+fn filter_signature(filter: &AudioFilter) -> FilterSignature {
+    FilterSignature {
+        kind: match filter.kind.as_str() {
+            "lowpass" => "lowpass",
+            "highpass" => "highpass",
+            "bandpass" => "bandpass",
+            "notch" => "notch",
+            "allpass" => "allpass",
+            "peaking" => "peaking",
+            "lowshelf" => "lowshelf",
+            "highshelf" => "highshelf",
+            _ => "unsupported",
+        },
+        frequency: filter.frequency.to_bits(),
+        q: filter.q.to_bits(),
+        gain: filter.gain.to_bits(),
+        detune: filter.detune.to_bits(),
     }
 }
 
@@ -730,6 +852,7 @@ fn seconds_to_duration(seconds: f64) -> Duration {
 mod tests {
     use super::{decode_audio, AudioFilter, FilterSource};
     use rodio::buffer::SamplesBuffer;
+    use std::sync::{Arc, Mutex};
 
     fn test_wav() -> Vec<u8> {
         let sample_rate = 8u32;
@@ -767,6 +890,7 @@ mod tests {
     #[test]
     fn applies_native_biquad_filter_chain_to_multichannel_samples() {
         let filter = AudioFilter {
+            id: 1,
             kind: "lowpass".to_string(),
             frequency: 400.0,
             q: 0.707,
@@ -793,6 +917,7 @@ mod tests {
             "highshelf",
         ] {
             let filter = AudioFilter {
+                id: 2,
                 kind: kind.to_string(),
                 frequency: 1_000.0,
                 q: 1.0,
@@ -815,5 +940,24 @@ mod tests {
         assert_eq!(frequency.len(), 16);
         assert!(frequency.iter().any(|value| *value > 0));
         assert!(time_domain.iter().all(|value| *value == 255));
+    }
+
+    #[test]
+    fn dynamic_biquad_rebuilds_coefficients_when_parameters_change() {
+        let params = Arc::new(Mutex::new(AudioFilter {
+            id: 7,
+            kind: "lowpass".to_string(),
+            frequency: 200.0,
+            q: 0.707,
+            gain: 0.0,
+            detune: 0.0,
+        }));
+        let mut filter = super::DynamicBiquad::new(params.clone(), 48_000, 1).unwrap();
+        let before = filter.biquad.as_ref().unwrap().b0;
+        filter.process(0, 1.0);
+        params.lock().unwrap().frequency = 4_000.0;
+        filter.process(0, 0.0);
+        let after = filter.biquad.as_ref().unwrap().b0;
+        assert_ne!(before, after);
     }
 }
