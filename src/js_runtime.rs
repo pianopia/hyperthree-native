@@ -18,6 +18,7 @@ use boa_engine::{
     },
     Context, JsArgs, JsError, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Source,
 };
+use image::AnimationDecoder;
 use std::{
     cell::RefCell,
     fs,
@@ -1676,6 +1677,92 @@ impl JsRuntime {
                 })
             })
             .map_err(|error| anyhow::anyhow!("failed to register image decode binding: {error}"))?;
+
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeDecodeAnimatedImage"),
+                1,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let source = args.get_or_undefined(0).to_object(context).map_err(|_| {
+                            JsNativeError::typ()
+                                .with_message("animated image source must be a Blob")
+                        })?;
+                        let bytes = source
+                            .get(js_string!("__hyperthreeBytes"), context)
+                            .and_then(|value| byte_array_value(&value, context))?;
+                        let frames = decode_animated_gif(&bytes).map_err(|error| {
+                            JsNativeError::error()
+                                .with_message(format!("failed to decode animated image: {error}"))
+                        })?;
+                        let width = frames[0].width;
+                        let height = frames[0].height;
+                        let mut values = Vec::with_capacity(frames.len());
+                        for frame in frames {
+                            if frame.width != width || frame.height != height {
+                                return Err(JsNativeError::error()
+                                    .with_message(
+                                        "animated image frames have inconsistent dimensions",
+                                    )
+                                    .into());
+                            }
+                            let data = JsArrayBuffer::from_byte_block(
+                                AlignedVec::from_iter(0, frame.data),
+                                context,
+                            )
+                            .map_err(|error| {
+                                JsNativeError::error().with_message(format!(
+                                    "failed to create animated image frame buffer: {error}"
+                                ))
+                            })?;
+                            let value = JsObject::with_object_proto(context.intrinsics());
+                            value.set(
+                                js_string!("width"),
+                                JsValue::from(frame.width as f64),
+                                false,
+                                context,
+                            )?;
+                            value.set(
+                                js_string!("height"),
+                                JsValue::from(frame.height as f64),
+                                false,
+                                context,
+                            )?;
+                            value.set(
+                                js_string!("durationMs"),
+                                JsValue::from(frame.duration_ms),
+                                false,
+                                context,
+                            )?;
+                            value.set(js_string!("data"), data, false, context)?;
+                            values.push(value.into());
+                        }
+                        let result = JsObject::with_object_proto(context.intrinsics());
+                        result.set(
+                            js_string!("width"),
+                            JsValue::from(width as f64),
+                            false,
+                            context,
+                        )?;
+                        result.set(
+                            js_string!("height"),
+                            JsValue::from(height as f64),
+                            false,
+                            context,
+                        )?;
+                        result.set(
+                            js_string!("frames"),
+                            JsArray::from_iter(values, context),
+                            false,
+                            context,
+                        )?;
+                        Ok(result.into())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register animated image decode binding: {error}")
+            })?;
 
         let asset_draw_store = asset_store;
         let asset_draw_state = render_state;
@@ -3634,6 +3721,49 @@ fn byte_array_value(value: &JsValue, context: &mut Context) -> JsResult<Vec<u8>>
     Ok(bytes)
 }
 
+struct DecodedAnimationFrame {
+    width: u32,
+    height: u32,
+    duration_ms: f64,
+    data: Vec<u8>,
+}
+
+fn decode_animated_gif(bytes: &[u8]) -> Result<Vec<DecodedAnimationFrame>> {
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes))
+        .map_err(|error| anyhow::anyhow!("failed to decode animated GIF: {error}"))?;
+    let mut total_bytes = 0usize;
+    let mut decoded = Vec::new();
+    for frame in decoder.into_frames() {
+        let frame = frame
+            .map_err(|error| anyhow::anyhow!("failed to decode animated GIF frame: {error}"))?;
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let image = frame.into_buffer();
+        let width = image.width();
+        let height = image.height();
+        let data = image.into_raw();
+        total_bytes = total_bytes
+            .checked_add(data.len())
+            .ok_or_else(|| anyhow::anyhow!("animated GIF frame size overflowed"))?;
+        anyhow::ensure!(
+            total_bytes <= 256 * 1024 * 1024,
+            "animated GIF decoded frames exceed 256 MiB"
+        );
+        let duration_ms = if denominator == 0 {
+            100.0
+        } else {
+            (numerator as f64 / denominator as f64).max(1.0)
+        };
+        decoded.push(DecodedAnimationFrame {
+            width,
+            height,
+            duration_ms,
+            data,
+        });
+    }
+    anyhow::ensure!(!decoded.is_empty(), "animated GIF has no frames");
+    Ok(decoded)
+}
+
 fn raw_ktx2_result(source: &[u8], context: &mut Context) -> JsResult<JsValue> {
     if source.len() < 104 {
         return Ok(JsValue::null());
@@ -3826,7 +3956,7 @@ fn choose_basis_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_three_compatibility_source, JsRuntime};
+    use super::{decode_animated_gif, normalize_three_compatibility_source, JsRuntime};
     use crate::bridge::{NativeInputState, NativeRenderState};
     use std::{
         fs,
@@ -4766,6 +4896,36 @@ mod tests {
                 "if (globalThis.__videoFrameProbe !== true) throw new Error('VideoFrame probe failed');",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn animated_gif_decodes_composited_frames_and_delays() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            let first = image::Frame::from_parts(
+                image::RgbaImage::from_vec(2, 1, vec![255, 0, 0, 255, 255, 0, 0, 255]).unwrap(),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(40, 1),
+            );
+            let second = image::Frame::from_parts(
+                image::RgbaImage::from_vec(2, 1, vec![0, 0, 255, 255, 0, 0, 255, 255]).unwrap(),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(80, 1),
+            );
+            encoder.encode_frames([first, second]).unwrap();
+        }
+
+        let frames = decode_animated_gif(&bytes).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!((frames[0].width, frames[0].height), (2, 1));
+        assert_eq!((frames[1].width, frames[1].height), (2, 1));
+        assert_eq!(frames[0].duration_ms, 40.0);
+        assert_eq!(frames[1].duration_ms, 80.0);
+        assert_eq!(&frames[0].data[..4], &[255, 0, 0, 255]);
+        assert_eq!(&frames[1].data[..4], &[0, 0, 255, 255]);
     }
 
     #[test]

@@ -4262,6 +4262,9 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       this.__loadPromise = Promise.resolve();
       this.__loadToken = 0;
       this.__rafId = null;
+      this.__frames = [];
+      this.__frameIndex = 0;
+      this.__lastPumpTime = null;
       this._src = '';
       this.currentFrame = null;
       this.data = new Uint8Array(0);
@@ -4307,23 +4310,58 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     setAttribute(name, value) { if (String(name).toLowerCase() === 'src') this.src = value; }
     getAttribute(name) { return String(name).toLowerCase() === 'src' ? this._src : null; }
     canPlayType(type) { return String(type || '').startsWith('image/') ? 'probably' : ''; }
+    __setFrame(index) {
+      const frame = this.__frames[index];
+      if (!frame) return;
+      this.currentFrame?.close();
+      this.__frameIndex = index;
+      this.videoWidth = frame.width;
+      this.videoHeight = frame.height;
+      this.data = new Uint8Array(frame.data);
+      this.currentFrame = new VideoFrame({
+        width: frame.width,
+        height: frame.height,
+        data: this.data,
+      }, { timestamp: Math.round(this.currentTime * 1000000) });
+    }
+    __frameIndexForTime(time) {
+      let elapsed = 0;
+      for (let index = 0; index < this.__frames.length; index += 1) {
+        elapsed += this.__frames[index].durationMs / 1000;
+        if (time < elapsed) return index;
+      }
+      return Math.max(0, this.__frames.length - 1);
+    }
     load() {
       const token = ++this.__loadToken;
       this.readyState = this._src ? 1 : 0;
       this.networkState = this._src ? 2 : 0;
       this.ended = false;
+      this.__frames = [];
+      this.__frameIndex = 0;
+      this.__lastPumpTime = null;
       if (!this._src) return;
       this.__loadPromise = fetch(this._src)
         .then(response => response.blob())
-        .then(blob => createImageBitmap(blob))
-        .then(bitmap => {
-          if (token !== this.__loadToken) { bitmap.close(); return; }
-          this.currentFrame?.close();
-          this.videoWidth = bitmap.width;
-          this.videoHeight = bitmap.height;
-          this.data = new Uint8Array(bitmap.data);
-          this.currentFrame = new VideoFrame(bitmap, { timestamp: Math.round(this.currentTime * 1000000) });
-          this.duration = 0;
+        .then(blob => {
+          const isAnimatedGif = typeof globalThis.__hyperthreeDecodeAnimatedImage === 'function' &&
+            /\.gif(?:[?#].*)?$/i.test(this._src);
+          if (isAnimatedGif) {
+            const animated = globalThis.__hyperthreeDecodeAnimatedImage(blob);
+            return { animated: true, frames: animated.frames };
+          }
+          return createImageBitmap(blob).then(bitmap => {
+            const frame = { width: bitmap.width, height: bitmap.height, data: new Uint8Array(bitmap.data), durationMs: 0 };
+            bitmap.close?.();
+            return { animated: false, frames: [frame] };
+          });
+        })
+        .then(payload => {
+          if (token !== this.__loadToken) return;
+          this.__frames = payload.frames;
+          this.currentTime = 0;
+          this.duration = payload.animated ? payload.frames.reduce((total, frame) => total + frame.durationMs, 0) / 1000 : 0;
+          this.__setFrame(0);
           this.readyState = 2;
           this.networkState = 1;
           this.dispatchEvent(new Event('loadedmetadata'));
@@ -4356,14 +4394,34 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       this.__rafId = requestAnimationFrame(() => {
         this.__rafId = null;
         if (this.paused) return;
+        const now = performance.now();
+        const elapsed = this.__lastPumpTime === null ? 0 : Math.max(0, now - this.__lastPumpTime) * Math.max(0, this.playbackRate);
+        this.__lastPumpTime = now;
+        if (this.__frames.length > 1 && this.duration > 0) {
+          this.currentTime += elapsed / 1000;
+          if (this.currentTime >= this.duration) {
+            if (this.loop) {
+              this.currentTime %= this.duration;
+            } else {
+              this.currentTime = this.duration;
+              this.ended = true;
+            }
+          }
+          const nextFrame = this.__frameIndexForTime(this.currentTime);
+          if (nextFrame !== this.__frameIndex) this.__setFrame(nextFrame);
+        }
         this.__notifyFrame();
-        if (this.loop) {
-          this.currentTime = 0;
-          this.__pump();
-        } else {
+        if (this.ended && !this.loop) {
+          this.paused = true;
+          this.dispatchEvent(new Event('ended'));
+        } else if (this.__frames.length <= 1 && !this.loop) {
           this.ended = true;
           this.paused = true;
           this.dispatchEvent(new Event('ended'));
+        } else if (this.loop && this.__frames.length <= 1) {
+          this.__pump();
+        } else {
+          this.__pump();
         }
       });
     }
@@ -4372,6 +4430,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       this.ended = false;
       return this.__loadPromise.then(() => {
         if (this.readyState >= this.HAVE_CURRENT_DATA) {
+          this.__lastPumpTime = performance.now();
           this.dispatchEvent(new Event('play'));
           this.__notifyFrame();
           this.__pump();

@@ -60,6 +60,7 @@
 - [x] Native external RGBA frame import fallback, `externalTexture` bind-group compatibility, WGSL sampling normalization, and GPU readback fixture
 - [x] WebCodecs-compatible RGBA `VideoFrame` shape (`clone`, `copyTo`, `close`) and Three.js `VideoFrameTexture.setFrame()` fixture
 - [x] RGBA-backed `HTMLVideoElement` compatibility boundary with `play/pause`, `readyState`, and `requestVideoFrameCallback()` fixture
+- [x] Animated GIF multi-frame decode with per-frame delays and `HTMLVideoElement` frame scheduling
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration
