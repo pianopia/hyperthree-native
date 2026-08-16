@@ -4452,7 +4452,91 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     }
     cancelVideoFrameCallback(id) { this.__frameCallbacks.delete(id); }
   };
-  globalThis.HTMLImageElement = globalThis.HTMLImageElement || function HTMLImageElement() {};
+  globalThis.HTMLImageElement = globalThis.HTMLImageElement || class HTMLImageElement {
+    constructor() {
+      this.__listeners = new Map();
+      this.__loadToken = 0;
+      this.__loadPromise = Promise.resolve();
+      this.__loadError = null;
+      this._src = '';
+      this.crossOrigin = null;
+      this.width = 0;
+      this.height = 0;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.data = new Uint8Array(0);
+      this.complete = false;
+      this.__loadError = null;
+      this.alt = '';
+    }
+    get src() { return this._src; }
+    set src(value) {
+      const token = ++this.__loadToken;
+      this._src = String(value);
+      this.complete = false;
+      this.width = 0;
+      this.height = 0;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.data = new Uint8Array(0);
+      if (!this._src) {
+        this.__loadPromise = Promise.resolve();
+        return;
+      }
+      this.__loadPromise = fetch(this._src)
+        .then(response => response.blob())
+        .then(blob => createImageBitmap(blob))
+        .then(bitmap => {
+          if (token !== this.__loadToken) return;
+          this.width = bitmap.width;
+          this.height = bitmap.height;
+          this.naturalWidth = bitmap.width;
+          this.naturalHeight = bitmap.height;
+          this.data = new Uint8Array(bitmap.data);
+          this.complete = true;
+          bitmap.close?.();
+          this.dispatchEvent(new Event('load'));
+        })
+        .catch(error => {
+          if (token !== this.__loadToken) return;
+          this.complete = true;
+          this.__loadError = error;
+          this.dispatchEvent(Object.assign(new Event('error'), { error }));
+        });
+    }
+    get currentSrc() { return this._src; }
+    addEventListener(type, listener) {
+      if (typeof listener !== 'function') return;
+      const listeners = this.__listeners.get(type) || new Set();
+      listeners.add(listener);
+      this.__listeners.set(type, listeners);
+    }
+    removeEventListener(type, listener) { this.__listeners.get(type)?.delete(listener); }
+    dispatchEvent(event) {
+      for (const listener of this.__listeners.get(event.type) || []) listener.call(this, event);
+      const handler = this['on' + event.type];
+      if (typeof handler === 'function') handler.call(this, event);
+      return !event.defaultPrevented;
+    }
+    decode() {
+      return this.__loadPromise.then(() => {
+        if (this.__loadError) throw this.__loadError;
+      });
+    }
+    setAttribute(name, value) {
+      const normalized = String(name).toLowerCase();
+      if (normalized === 'src') this.src = value;
+      else if (normalized === 'crossorigin') this.crossOrigin = value;
+      else this[normalized] = value;
+    }
+    getAttribute(name) {
+      const normalized = String(name).toLowerCase();
+      if (normalized === 'src') return this._src;
+      if (normalized === 'crossorigin') return this.crossOrigin;
+      return this[normalized] ?? null;
+    }
+  };
+  globalThis.Image = globalThis.Image || globalThis.HTMLImageElement;
   globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
   globalThis.VideoFrame = globalThis.VideoFrame || function VideoFrame() {};
   globalThis.ImageData = globalThis.ImageData || class ImageData {
@@ -4617,9 +4701,10 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     createElement(name) {
       if (name === 'canvas') return nativeCanvas;
       if (name === 'video') return new HTMLVideoElement();
+      if (name === 'img' || name === 'image') return new HTMLImageElement();
       return { style: {}, addEventListener() {}, removeEventListener() {} };
     },
-    createElementNS(_namespace, name) { return this.createElement(name); },
+    createElementNS(_namespace, name) { return this.createElement(String(name).toLowerCase()); },
     body: { appendChild() {}, removeChild() {} },
   };
   globalThis.document.exitPointerLock = () => { __hyperthreeExitPointerLock(); };

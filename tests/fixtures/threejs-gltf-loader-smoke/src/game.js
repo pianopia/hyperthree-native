@@ -116,6 +116,7 @@ globalThis.__gltfSmokeError = null;
 globalThis.__gltfSmokeLoaded = false;
 globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
+globalThis.__gltfTextureLoaderSmoke = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
@@ -552,6 +553,18 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const renderer = new WebGPURenderer({ canvas: globalThis.__hyperthreeNativeCanvas, antialias: false });
   globalThis.__gltfSmokeStage = "before-renderer-init";
   await renderer.init();
+  const textureLoader = new THREE.TextureLoader();
+  const loadedTexture = await textureLoader.loadAsync("public/generated/texture.png");
+  loadedTexture.colorSpace = THREE.SRGBColorSpace;
+  const textureLoaderMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.5, 0.5),
+    new THREE.MeshBasicMaterial({ map: loadedTexture }),
+  );
+  textureLoaderMesh.position.set(-1.8, 1.1, 0);
+  scene.add(textureLoaderMesh);
+  globalThis.__gltfTextureLoaderSmoke = loadedTexture.image instanceof HTMLImageElement &&
+    loadedTexture.image.complete === true && loadedTexture.image.naturalWidth === 1 &&
+    loadedTexture.image.naturalHeight === 1 && loadedTexture.image.data?.byteLength === 4;
   const ktx2Loader = new KTX2Loader();
   ktx2Loader.detectSupport(renderer);
   renderer.setSize(640, 360, false);
@@ -720,6 +733,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
+      !globalThis.__gltfTextureLoaderSmoke ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfRendererReadbackSmoke ||
