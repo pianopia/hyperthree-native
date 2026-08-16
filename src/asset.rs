@@ -232,7 +232,7 @@ impl AssetStore {
         } else {
             reader
                 .read_tex_coords(0)
-                .map(|coords| coords.into_f32().map(|[u, v]| [u, v]).collect())
+                .map(|coords| coords.into_f32().collect())
                 .unwrap_or_default()
         };
         anyhow::ensure!(
@@ -605,7 +605,7 @@ fn apply_meshopt_filter(bytes: &mut [u8], stride: usize, filter: &str) -> Result
         }
         "EXPONENTIAL" => {
             anyhow::ensure!(
-                bytes.len() % 4 == 0,
+                bytes.len().is_multiple_of(4),
                 "meshopt exponential filter requires four-byte components"
             );
             let mut values = bytes

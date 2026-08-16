@@ -524,30 +524,29 @@ fn run_native(
                         dispatch_input_event(&mut host, event_type, init.clone());
                         dispatch_input_event(&mut host, pointer_event_type, init);
                     }
-                    WindowEvent::RedrawRequested => {
+                    WindowEvent::RedrawRequested
                         if host
                             .renderer()
                             .webgpu_context()
                             .device_lost_message()
-                            .is_none()
-                        {
-                            match host.renderer_mut().render() {
-                                Ok(()) => {}
-                                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                    let size = host.renderer().window.inner_size();
-                                    if host
-                                        .renderer()
-                                        .webgpu_context()
-                                        .device_lost_message()
-                                        .is_none()
-                                    {
-                                        host.renderer_mut().resize(size)
-                                    }
+                            .is_none() =>
+                    {
+                        match host.renderer_mut().render() {
+                            Ok(()) => {}
+                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                let size = host.renderer().window.inner_size();
+                                if host
+                                    .renderer()
+                                    .webgpu_context()
+                                    .device_lost_message()
+                                    .is_none()
+                                {
+                                    host.renderer_mut().resize(size)
                                 }
-                                Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                                Err(wgpu::SurfaceError::Timeout) => {
-                                    log::warn!("surface timeout; skipping frame")
-                                }
+                            }
+                            Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+                            Err(wgpu::SurfaceError::Timeout) => {
+                                log::warn!("surface timeout; skipping frame")
                             }
                         }
                     }

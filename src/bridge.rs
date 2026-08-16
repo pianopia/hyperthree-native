@@ -123,7 +123,7 @@ impl GeometryRegistry {
         if positions.len() < 3 {
             return Err("BufferGeometry must contain at least three vertices".to_string());
         }
-        if indices.len() < 3 || indices.len() % 3 != 0 {
+        if indices.len() < 3 || !indices.len().is_multiple_of(3) {
             return Err("BufferGeometry indices must contain complete triangles".to_string());
         }
         if indices
