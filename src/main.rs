@@ -229,6 +229,12 @@ fn run_native(
                         log::error!("JavaScript shutdown callback failed: {shutdown_error:#}");
                     }
                     event_loop.exit();
+                } else if let Some(message) = renderer.webgpu_context().device_lost_message() {
+                    log::error!("native GPU device lost; stopping frame loop: {message}");
+                    if let Err(shutdown_error) = runtime.execute_shutdown() {
+                        log::error!("JavaScript shutdown callback failed: {shutdown_error:#}");
+                    }
+                    event_loop.exit();
                 } else {
                     renderer.window.request_redraw();
                 }

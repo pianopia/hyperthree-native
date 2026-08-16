@@ -283,6 +283,18 @@ impl NativeWebGpuContext {
         self.presented_this_frame.swap(false, Ordering::AcqRel)
     }
 
+    /// Returns the native loss record after wgpu has reported a device loss.
+    /// The JS `GPUDevice.lost` promise uses the same record; the host uses it
+    /// to stop before submitting more work to an invalid device.
+    pub fn device_lost_message(&self) -> Option<String> {
+        self.device_events
+            .lost
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|event| format!("{}: {}", event.reason, event.message))
+    }
+
     pub fn resize_surface(&self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 {
             return Ok(());
