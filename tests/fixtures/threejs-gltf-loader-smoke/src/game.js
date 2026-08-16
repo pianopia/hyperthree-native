@@ -103,6 +103,7 @@ globalThis.__gltfDeviceLimitsSmoke = false;
 globalThis.__gltfQueueSyncSmoke = false;
 globalThis.__gltfComputeSmoke = false;
 globalThis.__gltfResourceDescriptorSmoke = false;
+globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -127,6 +128,73 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   device.queue.submit([readbackEncoder.finish()]);
   await device.queue.onSubmittedWorkDone();
   globalThis.__gltfQueueSyncSmoke = true;
+  const externalImage = {
+    width: 1,
+    height: 1,
+    data: new Uint8Array([5, 17, 29, 255]),
+  };
+  const externalTexture = device.importExternalTexture({ source: externalImage });
+  const externalSampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
+  const externalLayout = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+  ] });
+  const externalPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [externalLayout] });
+  const externalShader = device.createShaderModule({ code: `
+    @group(0) @binding(0) var externalImage: texture_external;
+    @group(0) @binding(1) var externalSampler: sampler;
+    @vertex fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+      var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+      return vec4f(positions[index], 0.0, 1.0);
+    }
+    @fragment fn fs_main() -> @location(0) vec4f {
+      return textureSampleBaseClampToEdge(externalImage, externalSampler, vec2f(0.5, 0.5));
+    }
+  ` });
+  const externalPipeline = device.createRenderPipeline({
+    layout: externalPipelineLayout,
+    vertex: { module: externalShader, entryPoint: "vs_main", buffers: [] },
+    fragment: { module: externalShader, entryPoint: "fs_main", targets: [{ format: "rgba8unorm" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  const externalBindGroup = device.createBindGroup({
+    layout: externalLayout,
+    entries: [
+      { binding: 0, resource: externalTexture },
+      { binding: 1, resource: externalSampler },
+    ],
+  });
+  const externalTarget = device.createTexture({
+    size: { width: 1, height: 1 },
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const externalReadback = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const externalEncoder = device.createCommandEncoder();
+  const externalPass = externalEncoder.beginRenderPass({ colorAttachments: [{
+    view: externalTarget.createView(),
+    loadOp: "clear",
+    storeOp: "store",
+    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+  }] });
+  externalPass.setPipeline(externalPipeline);
+  externalPass.setBindGroup(0, externalBindGroup);
+  externalPass.draw(3);
+  externalPass.end();
+  externalEncoder.copyTextureToBuffer(
+    { texture: externalTarget },
+    { buffer: externalReadback, bytesPerRow: 256, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([externalEncoder.finish()]);
+  await externalReadback.mapAsync(GPUMapMode.READ);
+  const externalBytes = new Uint8Array(externalReadback.getMappedRange());
+  globalThis.__gltfExternalTextureSmoke = externalBytes[0] === 5 && externalBytes[1] === 17 && externalBytes[2] === 29 && externalBytes[3] === 255;
+  externalReadback.unmap();
+  externalReadback.destroy();
+  externalTarget.destroy();
+  externalTexture.destroy();
+  externalSampler.destroy();
   const computeStorage = device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const computeReadback = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const computeShader = device.createShaderModule({ code: `
@@ -466,6 +534,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
       !globalThis.__gltfComputeSmoke ||
       !globalThis.__gltfResourceDescriptorSmoke ||
+      !globalThis.__gltfExternalTextureSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

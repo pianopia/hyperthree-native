@@ -3336,6 +3336,16 @@ fn bind_group_layout_entry(value: &Value) -> Result<wgpu::BindGroupLayoutEntry, 
             ),
             view_dimension: texture_view_dimension(json_string(storage_texture, "viewDimension")),
         }
+    } else if value.get("externalTexture").is_some() {
+        // wgpu 0.20 has no separate external-texture binding type. The
+        // native bridge imports RGBA frames into a regular 2D texture, while
+        // the shader sanitizer below maps the WebGPU external texture syntax
+        // to the equivalent native texture sampling operations.
+        wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        }
     } else {
         return Err(format!("unsupported bind group layout entry {binding}"));
     };
@@ -3896,6 +3906,9 @@ fn sanitize_wgsl(source: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     let source = normalize_texture_load_levels(&source);
+    let source = source
+        .replace("texture_external", "texture_2d<f32>")
+        .replace("textureSampleBaseClampToEdge", "textureSample");
     normalize_abstract_integer_casts(&source)
 }
 
@@ -4500,6 +4513,32 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       limits: __HYPERTHREE_LIMITS__,
       createBuffer: makeBuffer,
       createTexture: makeTexture,
+      importExternalTexture(descriptor = {}) {
+        const source = descriptor.source;
+        const width = source?.codedWidth ?? source?.displayWidth ?? source?.width;
+        const height = source?.codedHeight ?? source?.displayHeight ?? source?.height;
+        if (!source || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || !source.data) {
+          throw new TypeError('native external texture source must provide width, height, and RGBA data');
+        }
+        const texture = makeTexture({
+          size: { width, height },
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        queue.writeTexture(
+          { texture },
+          source.data,
+          { offset: 0, bytesPerRow: width * 4, rowsPerImage: height },
+          { width, height, depthOrArrayLayers: 1 },
+        );
+        const view = texture.createView();
+        return makeHandle(handleId(view), {
+          __textureView: true,
+          __externalTexture: true,
+          __externalBackingTexture: texture,
+          destroy: () => texture.destroy(),
+        });
+      },
       createShaderModule(descriptor = {}) {
         return makeHandle(__hyperthreeWebGpuCreateShaderModule(descriptor.code ?? ''));
       },
@@ -4749,6 +4788,16 @@ mod tests {
         let source = "let level = u32( 0.0 ); let layer = i32( 1.0 );";
 
         assert_eq!(sanitize_wgsl(source), "let level = 0u; let layer = 1i;");
+    }
+
+    #[test]
+    fn normalizes_external_texture_sampling_for_native_wgpu() {
+        let source = "@group(0) @binding(0) var video: texture_external; fn sample() { let color = textureSampleBaseClampToEdge(video, sampler, vec2f(0.5)); }";
+
+        assert_eq!(
+            sanitize_wgsl(source),
+            "@group(0) @binding(0) var video: texture_2d<f32>; fn sample() { let color = textureSample(video, sampler, vec2f(0.5)); }"
+        );
     }
 
     #[test]

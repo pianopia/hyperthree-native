@@ -102,6 +102,15 @@ dispatch経路もfixtureで検証している。
 HDR renderable、BGRA storage、float32 filterable featureだけをDevice/JSへ公開する。
 `GPUBuffer`のsize/usage/mapStateと`GPUTexture`のwidth/height/depthOrArrayLayers、
 mipLevelCount/sampleCount/dimension/format/usageも標準プロパティとして公開する。
+外部画像フレームについては、まず`GPUDevice.importExternalTexture({source})`を追加した。
+`ImageBitmap`/`VideoFrame`相当の`width`または`codedWidth`、`height`または`codedHeight`と
+RGBA `data`を受け取り、nativeの通常の2D `GPUTexture`へコピーしてtexture viewとして公開する。
+`externalTexture` bind-group entryはこのviewへ互換接続し、Three.js/TSLが生成する
+`texture_external`と`textureSampleBaseClampToEdge`はnative wgpu/Nagaが扱える
+`texture_2d<f32>`と`textureSample`へ正規化する。1×1 RGBAフレームの実サンプリングと
+MAP_READ readbackをfixtureで検証済みである。これはブラウザの`GPUExternalTexture`と同じ
+ゼロコピー共有ではなく、安全なRGBA取り込みフォールバックであり、HTMLVideoElementの
+デコーダー、色空間変換、videoFrameCallback、フレーム更新スケジューリングは未実装である。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。

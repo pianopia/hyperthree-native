@@ -51,6 +51,7 @@
 - [x] WebGPU storage-buffer ComputePass dispatch and MAP_READ readback fixture
 - [x] WebGPU standard r/rg/rgba, HDR packed, depth/stencil texture format mapping and optional feature negotiation
 - [x] WebGPU GPUBuffer/GPUTexture descriptor properties exposed to JavaScript and fixture-verified
+- [x] Native external RGBA frame import fallback, `externalTexture` bind-group compatibility, WGSL sampling normalization, and GPU readback fixture
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration
