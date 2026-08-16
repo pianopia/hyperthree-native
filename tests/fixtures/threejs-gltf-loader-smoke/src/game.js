@@ -96,6 +96,7 @@ globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfMappedBufferSmoke = false;
 globalThis.__gltfQuerySmoke = false;
+globalThis.__gltfRenderBundleSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -187,6 +188,40 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   occlusionQuerySet.destroy();
   occlusionResolve.destroy();
   occlusionReadback.destroy();
+  globalThis.__gltfSmokeStage = "before-render-bundle";
+  const bundleTarget = device.createTexture({
+    size: { width: 4, height: 4 },
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const bundleReadback = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const bundleEncoder = device.createRenderBundleEncoder({ colorFormats: ["rgba8unorm"] });
+  bundleEncoder.setPipeline(indirectPipeline);
+  bundleEncoder.draw(3, 1, 0, 0);
+  const bundle = bundleEncoder.finish();
+  const bundleCommandEncoder = device.createCommandEncoder();
+  const bundlePass = bundleCommandEncoder.beginRenderPass({ colorAttachments: [{
+    view: bundleTarget.createView(),
+    loadOp: "clear",
+    storeOp: "store",
+    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+  }] });
+  bundlePass.executeBundles([bundle]);
+  bundlePass.end();
+  bundleCommandEncoder.copyTextureToBuffer(
+    { texture: bundleTarget },
+    { buffer: bundleReadback, bytesPerRow: 256, rowsPerImage: 4 },
+    { width: 4, height: 4, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([bundleCommandEncoder.finish()]);
+  await bundleReadback.mapAsync(GPUMapMode.READ);
+  const bundleBytes = new Uint8Array(bundleReadback.getMappedRange());
+  globalThis.__gltfRenderBundleSmoke = bundleBytes[0] === 255 && bundleBytes[1] === 0 && bundleBytes[2] === 0 && bundleBytes[3] === 255;
+  bundleReadback.unmap();
+  bundle.destroy();
+  bundleReadback.destroy();
+  bundleTarget.destroy();
+  globalThis.__gltfSmokeStage = "after-render-bundle";
   indirectArgs.destroy();
   indirectReadback.destroy();
   indirectTarget.destroy();
@@ -344,7 +379,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
-      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfResourceLifecycleSmoke ||
+      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

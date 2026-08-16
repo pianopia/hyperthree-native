@@ -53,6 +53,8 @@ struct Resources {
     render_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     compute_pipelines: HashMap<u64, wgpu::ComputePipeline>,
     query_sets: HashMap<u64, wgpu::QuerySet>,
+    render_bundle_encoders: HashMap<u64, RenderBundleEncoderState>,
+    render_bundles: HashMap<u64, wgpu::RenderBundle>,
     command_encoders: HashMap<u64, CommandEncoderState>,
     open_passes: HashMap<u64, OpenPass>,
     command_buffers: HashMap<u64, QueuedCommandBuffer>,
@@ -167,6 +169,14 @@ struct TimestampWrites {
 }
 
 #[derive(Debug)]
+struct RenderBundleEncoderState {
+    color_formats: Vec<Option<wgpu::TextureFormat>>,
+    depth_stencil_format: Option<wgpu::RenderBundleDepthStencil>,
+    sample_count: u32,
+    commands: Vec<RenderCommand>,
+}
+
+#[derive(Debug)]
 struct ColorAttachmentState {
     view: u64,
     resolve_target: Option<u64>,
@@ -241,6 +251,7 @@ enum RenderCommand {
     },
     BeginOcclusionQuery(u32),
     EndOcclusionQuery,
+    ExecuteBundles(Vec<u64>),
 }
 
 #[derive(Debug)]
@@ -1070,6 +1081,181 @@ impl NativeWebGpuContext {
             .ok_or_else(|| format!("unknown GPUQuerySet handle {id}"))
     }
 
+    fn create_render_bundle_encoder(&self, descriptor: &Value) -> Result<u64, String> {
+        let color_formats = descriptor
+            .get("colorFormats")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "GPURenderBundleEncoder.colorFormats must be an array".to_string())?
+            .iter()
+            .map(|value| {
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    value
+                        .as_str()
+                        .map(|format| Some(texture_format(format)))
+                        .ok_or_else(|| {
+                            "render bundle color format must be a string or null".to_string()
+                        })
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let depth_stencil_format = descriptor
+            .get("depthStencilFormat")
+            .filter(|value| !value.is_null())
+            .and_then(Value::as_str)
+            .map(|format| wgpu::RenderBundleDepthStencil {
+                format: texture_format(format),
+                depth_read_only: descriptor
+                    .get("depthReadOnly")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                stencil_read_only: descriptor
+                    .get("stencilReadOnly")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            });
+        let sample_count = json_u32(descriptor, "sampleCount", 1);
+        if sample_count == 0 {
+            return Err("GPURenderBundleEncoder.sampleCount must be greater than zero".to_string());
+        }
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .render_bundle_encoders
+            .insert(
+                id,
+                RenderBundleEncoderState {
+                    color_formats,
+                    depth_stencil_format,
+                    sample_count,
+                    commands: Vec::new(),
+                },
+            );
+        Ok(id)
+    }
+
+    fn record_render_bundle_command(
+        &self,
+        encoder_id: u64,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
+        let values = payload
+            .as_array()
+            .ok_or_else(|| "render bundle command payload must be an array".to_string())?;
+        let command = match operation {
+            "setPipeline" => RenderCommand::SetPipeline(value_u64(values, 0)?),
+            "setBindGroup" => RenderCommand::SetBindGroup {
+                index: value_u32(values, 0)?,
+                bind_group: value_u64(values, 1)?,
+                dynamic_offsets: values
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_u64()
+                            .map(|value| value as u32)
+                            .ok_or_else(|| "dynamic offset must be an integer".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            "setVertexBuffer" => RenderCommand::SetVertexBuffer {
+                slot: value_u32(values, 0)?,
+                buffer: value_u64(values, 1)?,
+                offset: value_u64_or(values, 2, 0)?,
+                size: values.get(3).and_then(Value::as_u64),
+            },
+            "setIndexBuffer" => RenderCommand::SetIndexBuffer {
+                buffer: value_u64(values, 0)?,
+                offset: value_u64_or(values, 1, 0)?,
+                format: values
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .unwrap_or("uint32")
+                    .to_string(),
+            },
+            "draw" => RenderCommand::Draw {
+                vertex_count: value_u32(values, 0)?,
+                instance_count: value_u32_or(values, 1, 1)?,
+                first_vertex: value_u32_or(values, 2, 0)?,
+                first_instance: value_u32_or(values, 3, 0)?,
+            },
+            "drawIndexed" => RenderCommand::DrawIndexed {
+                index_count: value_u32(values, 0)?,
+                instance_count: value_u32_or(values, 1, 1)?,
+                first_index: value_u32_or(values, 2, 0)?,
+                base_vertex: value_i32_or(values, 3, 0)?,
+                first_instance: value_u32_or(values, 4, 0)?,
+            },
+            "drawIndirect" | "drawIndexedIndirect" => {
+                return Err(format!("{operation} is not supported in render bundles"))
+            }
+            other => return Err(format!("unsupported render bundle command {other}")),
+        };
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        resources
+            .render_bundle_encoders
+            .get_mut(&encoder_id)
+            .ok_or_else(|| format!("unknown GPURenderBundleEncoder handle {encoder_id}"))?
+            .commands
+            .push(command);
+        Ok(())
+    }
+
+    fn finish_render_bundle_encoder(&self, encoder_id: u64) -> Result<u64, String> {
+        let state = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .render_bundle_encoders
+            .remove(&encoder_id)
+            .ok_or_else(|| format!("unknown GPURenderBundleEncoder handle {encoder_id}"))?;
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let mut encoder =
+            self.device
+                .create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                    label: Some("hyperthree-js-render-bundle-encoder"),
+                    color_formats: &state.color_formats,
+                    depth_stencil: state.depth_stencil_format,
+                    sample_count: state.sample_count,
+                    multiview: None,
+                });
+        for command in state.commands {
+            encode_render_bundle_command(&mut encoder, &resources, command)?;
+        }
+        let bundle = encoder.finish(&wgpu::RenderBundleDescriptor {
+            label: Some("hyperthree-js-render-bundle"),
+        });
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .render_bundles
+            .insert(id, bundle);
+        Ok(id)
+    }
+
+    fn destroy_render_bundle(&self, id: u64) -> Result<(), String> {
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .render_bundles
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| format!("unknown GPURenderBundle handle {id}"))
+    }
+
     fn get_render_pipeline_bind_group_layout(
         &self,
         pipeline_id: u64,
@@ -1547,6 +1733,19 @@ impl NativeWebGpuContext {
             "endOcclusionQuery" => {
                 self.push_render_command(pass_id, RenderCommand::EndOcclusionQuery)
             }
+            "executeBundles" => self.push_render_command(
+                pass_id,
+                RenderCommand::ExecuteBundles(
+                    values
+                        .iter()
+                        .map(|value| {
+                            value.as_u64().ok_or_else(|| {
+                                "render bundle handle must be an integer".to_string()
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            ),
             "dispatchWorkgroups" => self.push_compute_command(
                 pass_id,
                 ComputeCommand::DispatchWorkgroups {
@@ -2166,6 +2365,58 @@ pub fn register_bindings(
         },
     )?;
 
+    let bundle_encoder_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateRenderBundleEncoder",
+        bundle_encoder_gpu,
+        |gpu, descriptor| gpu.create_render_bundle_encoder(descriptor),
+    )?;
+
+    let bundle_command_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuRenderBundleCommand",
+        3,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            let operation = string_arg(args, 1, context)?;
+            let payload = json_arg(args, 2, context)?;
+            bundle_command_gpu
+                .record_render_bundle_command(encoder_id, &operation, &payload)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let finish_bundle_encoder_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuFinishRenderBundleEncoder",
+        1,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            finish_bundle_encoder_gpu
+                .finish_render_bundle_encoder(encoder_id)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let destroy_render_bundle_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDestroyRenderBundle",
+        1,
+        move |_this, args, context| {
+            let id = number_arg(args, 0, context)? as u64;
+            destroy_render_bundle_gpu
+                .destroy_render_bundle(id)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
     let render_layout_gpu = gpu.clone();
     register(
         context,
@@ -2660,9 +2911,107 @@ fn encode_render_pass(
             }
             RenderCommand::BeginOcclusionQuery(index) => pass.begin_occlusion_query(index),
             RenderCommand::EndOcclusionQuery => pass.end_occlusion_query(),
+            RenderCommand::ExecuteBundles(ids) => {
+                let bundles = ids
+                    .iter()
+                    .map(|id| {
+                        resources
+                            .render_bundles
+                            .get(id)
+                            .ok_or_else(|| format!("unknown GPURenderBundle handle {id}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                pass.execute_bundles(bundles);
+            }
         }
     }
     drop(pass);
+    Ok(())
+}
+
+fn encode_render_bundle_command<'a>(
+    encoder: &mut wgpu::RenderBundleEncoder<'a>,
+    resources: &'a Resources,
+    command: RenderCommand,
+) -> Result<(), String> {
+    match command {
+        RenderCommand::SetPipeline(id) => {
+            let pipeline = resources
+                .render_pipelines
+                .get(&id)
+                .ok_or_else(|| format!("unknown GPURenderPipeline handle {id}"))?;
+            encoder.set_pipeline(pipeline);
+        }
+        RenderCommand::SetBindGroup {
+            index,
+            bind_group,
+            dynamic_offsets,
+        } => {
+            let bind_group = resources
+                .bind_groups
+                .get(&bind_group)
+                .ok_or_else(|| format!("unknown GPUBindGroup handle {bind_group}"))?;
+            encoder.set_bind_group(index, bind_group, &dynamic_offsets);
+        }
+        RenderCommand::SetVertexBuffer {
+            slot,
+            buffer,
+            offset,
+            size,
+        } => {
+            let buffer = resources
+                .buffers
+                .get(&buffer)
+                .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+            let slice = size
+                .map(|size| buffer.slice(offset..offset + size))
+                .unwrap_or_else(|| buffer.slice(offset..));
+            encoder.set_vertex_buffer(slot, slice);
+        }
+        RenderCommand::SetIndexBuffer {
+            buffer,
+            offset,
+            format,
+        } => {
+            let buffer = resources
+                .buffers
+                .get(&buffer)
+                .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+            encoder.set_index_buffer(buffer.slice(offset..), index_format(&format));
+        }
+        RenderCommand::Draw {
+            vertex_count,
+            instance_count,
+            first_vertex,
+            first_instance,
+        } => encoder.draw(
+            first_vertex..first_vertex + vertex_count,
+            first_instance..first_instance + instance_count,
+        ),
+        RenderCommand::DrawIndexed {
+            index_count,
+            instance_count,
+            first_index,
+            base_vertex,
+            first_instance,
+        } => encoder.draw_indexed(
+            first_index..first_index + index_count,
+            base_vertex,
+            first_instance..first_instance + instance_count,
+        ),
+        RenderCommand::DrawIndirect { .. } | RenderCommand::DrawIndexedIndirect { .. } => {
+            return Err("indirect draws are not supported in render bundles".to_string())
+        }
+        RenderCommand::SetViewport { .. }
+        | RenderCommand::SetScissorRect { .. }
+        | RenderCommand::SetBlendConstant(_)
+        | RenderCommand::SetStencilReference(_)
+        | RenderCommand::BeginOcclusionQuery(_)
+        | RenderCommand::EndOcclusionQuery
+        | RenderCommand::ExecuteBundles(_) => {
+            return Err("unsupported command in render bundle".to_string())
+        }
+    }
     Ok(())
 }
 
@@ -3930,6 +4279,16 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         }));
         return makeHandle(id, { destroy: () => __hyperthreeWebGpuDestroyQuerySet(id) });
       },
+      createRenderBundleEncoder(descriptor = {}) {
+        const id = __hyperthreeWebGpuCreateRenderBundleEncoder(descriptorJson({
+          colorFormats: descriptor.colorFormats ?? [],
+          depthStencilFormat: descriptor.depthStencilFormat,
+          depthReadOnly: descriptor.depthReadOnly,
+          stencilReadOnly: descriptor.stencilReadOnly,
+          sampleCount: descriptor.sampleCount ?? 1,
+        }));
+        return makeRenderBundleEncoder(id);
+      },
       createCommandEncoder() {
         const encoderId = __hyperthreeWebGpuCreateCommandEncoder();
         return makeHandle(encoderId, {
@@ -4018,10 +4377,30 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       drawIndexedIndirect(buffer, offset = 0) { command('drawIndexedIndirect', [handleId(buffer), offset]); },
       beginOcclusionQuery(queryIndex) { command('beginOcclusionQuery', [queryIndex]); },
       endOcclusionQuery() { command('endOcclusionQuery', []); },
+      executeBundles(bundles = []) { command('executeBundles', bundles.map(handleId)); },
       dispatchWorkgroups(x, y = 1, z = 1) { command('dispatchWorkgroups', [x, y, z]); },
       dispatchWorkgroupsIndirect(buffer, offset = 0) { command('dispatchWorkgroupsIndirect', [handleId(buffer), offset]); },
       end() { __hyperthreeWebGpuEndPass(passId); },
       endPass() { __hyperthreeWebGpuEndPass(passId); },
+    };
+  };
+  const makeRenderBundleEncoder = encoderId => {
+    const command = (operation, args) => __hyperthreeWebGpuRenderBundleCommand(encoderId, operation, JSON.stringify(args));
+    return {
+      setPipeline(pipeline) { command('setPipeline', [handleId(pipeline)]); },
+      setBindGroup(index, bindGroup, dynamicOffsets = []) { command('setBindGroup', [index, handleId(bindGroup), dynamicOffsets]); },
+      setVertexBuffer(slot, buffer, offset = 0, size) { command('setVertexBuffer', [slot, handleId(buffer), offset, size ?? null]); },
+      setIndexBuffer(buffer, format, offset = 0) { command('setIndexBuffer', [handleId(buffer), offset, format]); },
+      setViewport() {},
+      setScissorRect() {},
+      setBlendConstant() {},
+      setStencilReference() {},
+      draw(vertexCount, instanceCount = 1, firstVertex = 0, firstInstance = 0) { command('draw', [vertexCount, instanceCount, firstVertex, firstInstance]); },
+      drawIndexed(indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) { command('drawIndexed', [indexCount, instanceCount, firstIndex, baseVertex, firstInstance]); },
+      finish() {
+        const id = __hyperthreeWebGpuFinishRenderBundleEncoder(encoderId);
+        return makeHandle(id, { destroy: () => __hyperthreeWebGpuDestroyRenderBundle(id) });
+      },
     };
   };
   const adapter = {

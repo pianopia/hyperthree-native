@@ -42,6 +42,7 @@
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
+- [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration

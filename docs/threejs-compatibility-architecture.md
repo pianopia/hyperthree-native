@@ -82,7 +82,8 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
 shadow、equirectangular environment、MRT、indirect drawとそのGPU readbackも同じfixtureで
-スモーク済みである。`GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/
+スモーク済みである。`GPURenderBundleEncoder`の記録・finish・`executeBundles()`、
+`GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/
 `endOcclusionQuery()`、`resolveQuerySet()`とMAP_READ readbackもnative wgpuへ接続した。
 `GPUCanvasContext.configure()`/`unconfigure()`、canvas surface textureの
 寿命管理、Lost/Outdated時のnative再configureも標準Renderer経路へ接続した。ネイティブsurfaceが
