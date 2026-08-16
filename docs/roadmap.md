@@ -40,9 +40,12 @@
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
+- [x] Native AssetStore `EXT_meshopt_compression` attribute/triangle/index-sequence decode with filters
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
-- [ ] KTX2/Basis zero-copy decode, DRACO/Meshopt compression, and full material/animation GPU upload
+- [ ] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
+- [ ] KTX2/Basis native transcode and GPU texture upload
+- [ ] DRACO native decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
 

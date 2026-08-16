@@ -93,6 +93,13 @@ Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加
 KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
 
+ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、
+インデックスシーケンスの3モード展開も接続し、NONE/OCTAHEDRAL/QUATERNION/
+EXPONENTIALフィルタを含む圧縮・復元ラウンドトリップをテスト済みである。圧縮ビューを
+使わない資産は従来のgltf-rs readerへフォールバックするため、sparse accessorなどの
+既存挙動を不用意に狭めない。なお、これはネイティブAssetStore経路の対応であり、
+Three.js側の`GLTFLoader`へMeshoptDecoderを自動注入する層、DRACO、KTX2/Basisは未完了である。
+
 ### Phase B: Three.js renderer実行
 
 `navigator.gpu.requestAdapter()`、`requestDevice()`、canvas context、WGSL、
