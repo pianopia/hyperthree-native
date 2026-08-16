@@ -100,6 +100,8 @@ dispatch経路もfixtureで検証している。
 標準のr/rg/rgba integer・float、HDR packed、depth/stencil texture formatをwgpuへ
 変換し、adapterが提供するdepth clip、depth32float-stencil8、indirect-first-instance、
 HDR renderable、BGRA storage、float32 filterable featureだけをDevice/JSへ公開する。
+`GPUBuffer`のsize/usage/mapStateと`GPUTexture`のwidth/height/depthOrArrayLayers、
+mipLevelCount/sampleCount/dimension/format/usageも標準プロパティとして公開する。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。

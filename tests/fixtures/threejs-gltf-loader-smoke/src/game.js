@@ -102,6 +102,7 @@ globalThis.__gltfBufferTextureSmoke = false;
 globalThis.__gltfDeviceLimitsSmoke = false;
 globalThis.__gltfQueueSyncSmoke = false;
 globalThis.__gltfComputeSmoke = false;
+globalThis.__gltfResourceDescriptorSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -117,6 +118,9 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     device.limits.maxComputeWorkgroupsPerDimension > 0;
   const sourceBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const readbackBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  globalThis.__gltfResourceDescriptorSmoke = sourceBuffer.size === 4 &&
+    sourceBuffer.usage === (GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST) &&
+    sourceBuffer.mapState === "unmapped";
   device.queue.writeBuffer(sourceBuffer, 0, new Uint8Array([7, 11, 13, 17]));
   const readbackEncoder = device.createCommandEncoder();
   readbackEncoder.copyBufferToBuffer(sourceBuffer, 0, readbackBuffer, 0, 4);
@@ -212,6 +216,10 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     format: "rgba8unorm",
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
+  globalThis.__gltfResourceDescriptorSmoke = globalThis.__gltfResourceDescriptorSmoke &&
+    indirectTarget.width === 4 && indirectTarget.height === 4 &&
+    indirectTarget.depthOrArrayLayers === 1 && indirectTarget.mipLevelCount === 1 &&
+    indirectTarget.sampleCount === 1 && indirectTarget.format === "rgba8unorm";
   const indirectReadback = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const occlusionQuerySet = device.createQuerySet({ type: "occlusion", count: 1 });
   const occlusionResolve = device.createBuffer({ size: 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
@@ -457,6 +465,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
       !globalThis.__gltfComputeSmoke ||
+      !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

@@ -4217,7 +4217,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || textureUsage;
   const makeBuffer = (descriptor = {}) => {
     const size = descriptor.size ?? 1;
-    const id = __hyperthreeWebGpuCreateBuffer(size, descriptor.usage ?? GPUBufferUsage.COPY_DST);
+    const usage = descriptor.usage ?? GPUBufferUsage.COPY_DST;
+    const id = __hyperthreeWebGpuCreateBuffer(size, usage);
     const mapped = descriptor.mappedAtCreation === true;
     let shadow = mapped ? new ArrayBuffer(size) : null;
     let mappedForRead = false;
@@ -4225,6 +4226,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     let mappedSize = mapped ? size : 0;
     let bufferHandle;
     bufferHandle = makeHandle(id, {
+      size,
+      usage,
       mapState: mapped ? 'mapped' : 'unmapped',
       getMappedRange(offset = 0, rangeSize) {
         if (shadow === null) throw new TypeError('GPUBuffer is not mapped');
@@ -4269,17 +4272,30 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     const width = typeof size === 'number' ? size : (Array.isArray(size) ? (size[0] ?? 1) : (size.width ?? 1));
     const height = typeof size === 'number' ? 1 : (Array.isArray(size) ? (size[1] ?? 1) : (size.height ?? 1));
     const depth = typeof size === 'number' || Array.isArray(size) ? (Array.isArray(size) ? (size[2] ?? 1) : 1) : (size.depthOrArrayLayers ?? size.depth ?? 1);
+    const format = descriptor.format ?? 'rgba8unorm';
+    const usage = descriptor.usage ?? GPUTextureUsage.TEXTURE_BINDING;
+    const mipLevelCount = descriptor.mipLevelCount ?? 1;
+    const sampleCount = descriptor.sampleCount ?? 1;
+    const dimension = descriptor.dimension ?? '2d';
     const id = __hyperthreeWebGpuCreateTexture(
       width,
       height,
       depth,
-      descriptor.format ?? 'rgba8unorm',
-      descriptor.usage ?? GPUTextureUsage.TEXTURE_BINDING,
-      descriptor.mipLevelCount ?? 1,
-      descriptor.sampleCount ?? 1,
-      descriptor.dimension ?? '2d',
+      format,
+      usage,
+      mipLevelCount,
+      sampleCount,
+      dimension,
     );
     return makeHandle(id, {
+      width,
+      height,
+      depthOrArrayLayers: depth,
+      mipLevelCount,
+      sampleCount,
+      dimension,
+      format,
+      usage,
       createView: (viewDescriptor = {}) => makeHandle(__hyperthreeWebGpuCreateTextureView(id, descriptorJson(viewDescriptor)), { __textureView: true }),
       destroy: () => __hyperthreeWebGpuDestroyTexture(id),
     });
