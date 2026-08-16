@@ -119,8 +119,9 @@ await writable.close();
 `BoxGeometry`、`PlaneGeometry`、`SphereGeometry`と任意の位置/index/UV
 `BufferGeometry`をネイティブ描画へ同期します。任意のブラウザ向けThree.js
 ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API
-バインディング、入力・音声の全API、GPU Driven Culling、Indirect Draw、glTF/KTX2の
-完全な直接VRAM転送を引き続き実装する必要があります。現時点のGLTFLoader fixtureは
+バインディング、入力・音声の全API、GPU Driven Cullingの大規模シーン対応、glTF/KTX2の
+完全な直接VRAM転送を引き続き実装する必要があります。ComputePassで可視性フラグから
+Indirect引数を生成して描画するGPUカリングの初期fixtureは検証済みです。現時点のGLTFLoader fixtureは
 embedded buffer、GLB、外部buffer、PNG画像テクスチャ、Meshopt圧縮glTF、raw BC1/BasisLZ/UASTC KTX2を
 標準`KTX2Loader`/`KHR_texture_basisu`経由で検証済みです。BasisLZ/UASTC向けnative transcoder
 binding、raw KTX2のmip/face転送、Khronos公式Boxを使った標準`GLTFLoader`/`DRACOLoader`

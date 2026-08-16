@@ -82,7 +82,8 @@
 - [x] DRACO bitstream 2.3 Point Cloud decode with position/color official fixture
 - [x] DRACO all decoded attribute channels, unique-ID remapping for glTF custom attributes, and Point Cloud index omission in the standard loader bridge
 - [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
-- [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
+- [x] GPU-driven culling with compute-generated indirect draw fixture
+- [ ] Large-scene GPU-driven rendering benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
 
 ## Commerce

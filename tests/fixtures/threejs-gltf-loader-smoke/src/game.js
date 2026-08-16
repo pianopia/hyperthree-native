@@ -147,6 +147,7 @@ globalThis.__gltfBufferTextureSmoke = false;
 globalThis.__gltfDeviceLimitsSmoke = false;
 globalThis.__gltfQueueSyncSmoke = false;
 globalThis.__gltfComputeSmoke = false;
+globalThis.__gltfGpuCullingSmoke = false;
 globalThis.__gltfResourceDescriptorSmoke = false;
 globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfVideoFrameSmoke = false;
@@ -391,8 +392,44 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const occlusionQuerySet = device.createQuerySet({ type: "occlusion", count: 1 });
   const occlusionResolve = device.createBuffer({ size: 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
   const occlusionReadback = device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const indirectArgs = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT });
-  device.queue.writeBuffer(indirectArgs, 0, new Uint32Array([3, 1, 0, 0]));
+  const indirectArgs = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT });
+  const cullingFlags = device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE });
+  const cullingReadback = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  device.queue.writeBuffer(cullingFlags, 0, new Uint32Array([1, 0]));
+  const cullingShader = device.createShaderModule({ code: `
+    @group(0) @binding(0) var<storage, read> visible: array<u32>;
+    @group(0) @binding(1) var<storage, read_write> indirect: array<u32>;
+    @compute @workgroup_size(1) fn main() {
+      indirect[0] = 3u;
+      indirect[1] = visible[0];
+      indirect[2] = 0u;
+      indirect[3] = 0u;
+    }
+  ` });
+  const cullingPipeline = device.createComputePipeline({
+    layout: "auto",
+    compute: { module: cullingShader, entryPoint: "main" },
+  });
+  const cullingBindGroup = device.createBindGroup({
+    layout: cullingPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: cullingFlags } },
+      { binding: 1, resource: { buffer: indirectArgs } },
+    ],
+  });
+  const cullingEncoder = device.createCommandEncoder();
+  const cullingPass = cullingEncoder.beginComputePass();
+  cullingPass.setPipeline(cullingPipeline);
+  cullingPass.setBindGroup(0, cullingBindGroup);
+  cullingPass.dispatchWorkgroups(1);
+  cullingPass.end();
+  cullingEncoder.copyBufferToBuffer(indirectArgs, 0, cullingReadback, 0, 16);
+  device.queue.submit([cullingEncoder.finish()]);
+  await cullingReadback.mapAsync(GPUMapMode.READ);
+  const cullingValues = new Uint32Array(cullingReadback.getMappedRange());
+  globalThis.__gltfGpuCullingSmoke = cullingValues[0] === 3 && cullingValues[1] === 1 &&
+    cullingValues[2] === 0 && cullingValues[3] === 0;
+  cullingReadback.unmap();
   const indirectShader = device.createShaderModule({ code: `
     @vertex fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
       var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
@@ -465,6 +502,8 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   occlusionQuerySet.destroy();
   occlusionResolve.destroy();
   occlusionReadback.destroy();
+  cullingReadback.destroy();
+  cullingFlags.destroy();
   globalThis.__gltfSmokeStage = "before-render-bundle";
   const bundleTarget = device.createTexture({
     size: { width: 4, height: 4 },
@@ -691,6 +730,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
       !globalThis.__gltfComputeSmoke ||
+      !globalThis.__gltfGpuCullingSmoke ||
       !globalThis.__gltfTimestampSmoke ||
       !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfExternalTextureSmoke ||

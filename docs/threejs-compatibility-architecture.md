@@ -211,7 +211,8 @@ animation clipを、JSヒープを経由せずネイティブ側でストリー�
 TSL/NodeMaterialのshader graph、custom particle、instancing、post-processing、shadow、
 environment lighting、compute culling、indirect drawを同じWebGPU契約で実行する。
 NodeMaterialとpost-processing、画像／環境テクスチャ、MRT、shadow、indirect drawの
-初期経路はスモーク済みだが、公式サンプル全体と高度な環境／shadow／GPU-driven経路は
+初期経路と、ComputePassが可視性フラグからIndirect引数を生成して描画するGPUカリングfixtureは
+スモーク済みだが、公式サンプル全体と高度な環境／shadow／GPU-driven経路は
 まだ互換性テストを追加する段階である。
 
 ## 互換性の判定基準
