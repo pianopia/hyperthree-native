@@ -95,6 +95,7 @@ globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
+globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
 globalThis.__gltfSmokeReady = false;
 let smokeFrames = 0;
@@ -301,6 +302,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfMrtSmoke = mrt.isRenderTarget === true && mrt.texture.length === 2;
   await renderer.renderAsync(scene, camera);
   globalThis.__gltfSmokeRendered = device !== null && renderer.isWebGPURenderer === true;
+  const canvasContext = globalThis.__hyperthreeNativeCanvas.getContext('webgpu');
+  const canvasConfiguration = canvasContext.configuration;
+  canvasContext.unconfigure();
+  const canvasUnconfigured = canvasContext.configuration === null;
+  canvasContext.configure(canvasConfiguration);
+  globalThis.__gltfCanvasLifecycleSmoke = canvasUnconfigured && canvasContext.configuration === canvasConfiguration;
   globalThis.__gltfFeatureSmoke = instanced.isInstancedMesh && line.isLine && sprite.isSprite;
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
@@ -308,7 +315,8 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
-      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {
+      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
+      !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }
 }).catch((error) => {

@@ -19,7 +19,10 @@ pub struct NativeWebGpuContext {
     queue: Arc<wgpu::Queue>,
     surface: Arc<wgpu::Surface<'static>>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
+    supported_surface_formats: Vec<wgpu::TextureFormat>,
+    supported_alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     features: wgpu::Features,
+    configured: AtomicBool,
     presented_this_frame: AtomicBool,
     device_events: Arc<DeviceEvents>,
     resources: Mutex<Resources>,
@@ -248,6 +251,8 @@ impl NativeWebGpuContext {
         surface: Arc<wgpu::Surface<'static>>,
         surface_config: wgpu::SurfaceConfiguration,
         features: wgpu::Features,
+        supported_surface_formats: Vec<wgpu::TextureFormat>,
+        supported_alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     ) -> SharedNativeWebGpuContext {
         let device_events = Arc::new(DeviceEvents::default());
         let lost_events = Arc::clone(&device_events);
@@ -273,7 +278,10 @@ impl NativeWebGpuContext {
             queue,
             surface,
             surface_config: Mutex::new(surface_config),
+            supported_surface_formats,
+            supported_alpha_modes,
             features,
+            configured: AtomicBool::new(false),
             presented_this_frame: AtomicBool::new(false),
             device_events,
             resources: Mutex::new(Resources {
@@ -334,6 +342,69 @@ impl NativeWebGpuContext {
         config.width = width;
         config.height = height;
         self.surface.configure(&self.device, &config);
+        Ok(())
+    }
+
+    fn configure_surface(&self, descriptor: &Value) -> Result<(), String> {
+        let mut config = self
+            .surface_config
+            .lock()
+            .map_err(|_| "WebGPU surface configuration poisoned".to_string())?;
+        if let Some(format_name) = descriptor.get("format").and_then(Value::as_str) {
+            let format = texture_format(format_name);
+            if !self.supported_surface_formats.contains(&format) {
+                return Err(format!(
+                    "WebGPU canvas format {format_name} is not supported by the native surface"
+                ));
+            }
+            config.format = format;
+        }
+        if let Some(alpha_name) = descriptor.get("alphaMode").and_then(Value::as_str) {
+            let alpha_mode = match alpha_name {
+                "opaque" => wgpu::CompositeAlphaMode::Opaque,
+                "premultiplied" => wgpu::CompositeAlphaMode::PreMultiplied,
+                other => return Err(format!("unsupported WebGPU canvas alpha mode {other}")),
+            };
+            let alpha_mode = if self.supported_alpha_modes.contains(&alpha_mode) {
+                alpha_mode
+            } else if alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+                && self
+                    .supported_alpha_modes
+                    .contains(&wgpu::CompositeAlphaMode::Opaque)
+            {
+                // Some native surfaces expose opaque composition only. Keep the
+                // standard Three.js initialization path usable and preserve the
+                // surface's valid presentation mode; callers requiring transparent
+                // presentation must use a surface that advertises premultiplied
+                // alpha.
+                wgpu::CompositeAlphaMode::Opaque
+            } else {
+                return Err(format!(
+                    "WebGPU canvas alpha mode {alpha_name} is not supported by the native surface"
+                ));
+            };
+            config.alpha_mode = alpha_mode;
+        }
+        self.surface.configure(&self.device, &config);
+        self.configured.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn unconfigure_surface(&self) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let surface_texture_ids = resources
+            .surface_textures
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for texture_id in surface_texture_ids {
+            remove_surface_texture_views(&mut resources, texture_id);
+            resources.surface_textures.remove(&texture_id);
+        }
+        self.configured.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -595,6 +666,9 @@ impl NativeWebGpuContext {
     }
 
     fn get_current_surface_texture(&self) -> Result<u64, String> {
+        if !self.configured.load(Ordering::Acquire) {
+            return Err("WebGPU canvas context is not configured".to_string());
+        }
         let surface_texture = match self.surface.get_current_texture() {
             Ok(surface_texture) => surface_texture,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1785,11 +1859,31 @@ pub fn register_bindings(
         },
     )?;
 
+    let configure_canvas_gpu = gpu.clone();
     register(
         context,
         "__hyperthreeWebGpuConfigureCanvas",
+        1,
+        move |_this, args, context| {
+            let descriptor = json_arg(args, 0, context)?;
+            configure_canvas_gpu
+                .configure_surface(&descriptor)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let unconfigure_canvas_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuUnconfigureCanvas",
         0,
-        |_this, _args, _context| Ok(JsValue::undefined()),
+        move |_this, _args, _context| {
+            unconfigure_canvas_gpu
+                .unconfigure_surface()
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
     )?;
 
     let poll_device_gpu = gpu.clone();
@@ -3377,8 +3471,15 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     });
   };
   const canvasContext = {
-    configure(configuration = {}) { __hyperthreeWebGpuConfigureCanvas(); canvasContext.configuration = configuration; },
-    unconfigure() { canvasContext.configuration = null; },
+    configure(configuration = {}) {
+      __hyperthreeWebGpuConfigureCanvas(JSON.stringify({
+        format: configuration.format,
+        alphaMode: configuration.alphaMode,
+        usage: configuration.usage,
+      }));
+      canvasContext.configuration = configuration;
+    },
+    unconfigure() { __hyperthreeWebGpuUnconfigureCanvas(); canvasContext.configuration = null; },
     getCurrentTexture: makeSurfaceTexture,
   };
   const nativeCanvas = {

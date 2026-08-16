@@ -82,15 +82,18 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
 shadow、equirectangular environment、MRT、indirect drawとそのGPU readbackも同じfixtureで
-スモーク済みである。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
+スモーク済みである。`GPUCanvasContext.configure()`/`unconfigure()`、canvas surface textureの
+寿命管理、Lost/Outdated時のnative再configureも標準Renderer経路へ接続した。ネイティブsurfaceが
+opaque合成しか公開しない場合は、Three.jsのpremultiplied要求をopaqueへフォールバックする。
+この場合の透明canvas合成はまだブラウザとピクセル同値ではない。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
 Promiseへ配送し、error scopeはnative `push_error_scope`/`pop_error_scope`へ接続した。
 ホストは同じloss recordをフレーム境界で検出し、無効化されたGPUへ追加submitせず安全に
 停止する。`tests/device-loss-restart-smoke.js`では同じWindow上でnative device、Renderer、
 JS sessionを再生成してentry pointを再実行するところまで検証済みである。ゲームJSのヒープ状態
 は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
-Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はpresent lifecycle、
-DRACO、texture readback、未実装の標準WebGPU APIを
+Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次は透明合成を含む
+present/device-loss lifecycle、DRACOの追加属性、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
 
 ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、

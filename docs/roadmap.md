@@ -31,7 +31,7 @@
 - [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
 - [x] Native pipeline-derived bind group layouts and GPU buffer/texture copy commands
 - [x] WebGPU texture arrays, mip/sample descriptors, view descriptors, and typed upload layout
-- [x] Initial GPUCanvasContext and native swapchain presentation path
+- [x] Initial GPUCanvasContext configure/unconfigure and native swapchain presentation path
 - [x] Project-relative fetch/Request/Response/Headers and ArrayBuffer/TextDecoder asset boundary
 - [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
 - [x] Three.js 0.179 AnimationMixer transform and morph-target shader smoke on native Metal
@@ -43,10 +43,10 @@
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
-- [x] WebGPU canvas surface texture lifetime cleanup and Lost/Outdated native surface reconfiguration
+- [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [x] Native AssetStore `EXT_meshopt_compression` attribute/triangle/index-sequence decode with filters
-- [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
+- [ ] Complete canvas resize/device-loss/present lifecycle and transparent alpha fidelity for Three.js WebGPURenderer
 - [x] Three.js WebGPU compressed texture format negotiation and mip-level uploads
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
 - [x] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture

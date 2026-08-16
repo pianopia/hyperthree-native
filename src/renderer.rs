@@ -435,6 +435,8 @@ impl Renderer {
             surface.clone(),
             config.clone(),
             device.features(),
+            capabilities.formats.clone(),
+            capabilities.alpha_modes.clone(),
         );
 
         Ok(Self {
