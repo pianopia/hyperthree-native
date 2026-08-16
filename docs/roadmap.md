@@ -74,6 +74,7 @@
 - [x] DRACO native decoder hook at preload/init/decodeGeometry boundaries, resilient to Vite minification and Worker absence
 - [x] DRACO native geometry dispatcher with sequential index shape and Point Cloud marker for standalone consumers
 - [x] DRACO bitstream 2.3 Point Cloud decode with position/color official fixture
+- [x] DRACO all decoded attribute channels, unique-ID remapping for glTF custom attributes, and Point Cloud index omission in the standard loader bridge
 - [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms

@@ -1484,6 +1484,12 @@ impl JsRuntime {
                             false,
                             context,
                         )?;
+                        value.set(
+                            js_string!("attributeId"),
+                            JsValue::from(attribute.attribute_id as f64),
+                            false,
+                            context,
+                        )?;
                         value.set(js_string!("data"), data, false, context)?;
                         attributes.push(value.into());
                     }
@@ -2793,20 +2799,32 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
 
 				globalThis.__hyperthreeDracoNativeCalls = ( globalThis.__hyperthreeDracoNativeCalls || 0 ) + 1;
 				const nativeResult = globalThis.__hyperthreeDecodeDraco( new Uint8Array( buffer ) );
+				const requestedIDs = attributeIDs || this.defaultAttributeIDs;
 				const requestedTypes = attributeTypes || this.defaultAttributeTypes;
 				const attributes = [];
 
 				for ( const nativeAttribute of nativeResult.attributes ) {
 
-					const typeName = requestedTypes[ nativeAttribute.name ] || 'Float32Array';
+					let attributeName = nativeAttribute.name;
+					for ( const requestedName in requestedIDs ) {
+
+						if ( typeof requestedIDs[ requestedName ] === 'number' && requestedIDs[ requestedName ] === nativeAttribute.attributeId ) {
+
+							attributeName = requestedName;
+							break;
+
+						}
+
+					}
+					const typeName = requestedTypes[ attributeName ] || requestedTypes[ nativeAttribute.name ] || 'Float32Array';
 					const ArrayType = globalThis[ typeName ] || Float32Array;
 					const values = new Float32Array( nativeAttribute.data );
 					const typedValues = ArrayType === Float32Array ? values : new ArrayType( values );
-					attributes.push( { name: nativeAttribute.name, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace: vertexColorSpace } );
+					attributes.push( { name: attributeName, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace: vertexColorSpace } );
 
 				}
 
-				const geometry = this._createGeometry( { index: { array: new Uint32Array( nativeResult.index ) }, attributes: attributes } );
+				const geometry = this._createGeometry( { index: nativeResult.pointCloud ? null : { array: new Uint32Array( nativeResult.index ) }, attributes: attributes } );
 				return Promise.resolve( geometry ).then( callback ).catch( onError );
 
 			} catch ( error ) {
@@ -2828,16 +2846,24 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         try {
           globalThis.__hyperthreeDracoNativeCalls = (globalThis.__hyperthreeDracoNativeCalls || 0) + 1;
           const nativeResult = globalThis.__hyperthreeDecodeDraco(new Uint8Array(buffer2));
+          const requestedIDs = attributeIDs || this.defaultAttributeIDs;
           const requestedTypes = attributeTypes || this.defaultAttributeTypes;
           const attributes = [];
           for (const nativeAttribute of nativeResult.attributes) {
-            const typeName = requestedTypes[nativeAttribute.name] || 'Float32Array';
+            let attributeName = nativeAttribute.name;
+            for (const requestedName in requestedIDs) {
+              if (typeof requestedIDs[requestedName] === 'number' && requestedIDs[requestedName] === nativeAttribute.attributeId) {
+                attributeName = requestedName;
+                break;
+              }
+            }
+            const typeName = requestedTypes[attributeName] || requestedTypes[nativeAttribute.name] || 'Float32Array';
             const ArrayType = globalThis[typeName] || Float32Array;
             const values = new Float32Array(nativeAttribute.data);
             const typedValues = ArrayType === Float32Array ? values : new ArrayType(values);
-            attributes.push({name: nativeAttribute.name, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace});
+            attributes.push({name: attributeName, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace});
           }
-          const geometry = this._createGeometry({index: {array: new Uint32Array(nativeResult.index)}, attributes});
+          const geometry = this._createGeometry({index: nativeResult.pointCloud ? null : {array: new Uint32Array(nativeResult.index)}, attributes});
           return Promise.resolve(geometry).then(callback).catch(onError);
         } catch (error) {
           return Promise.reject(error).catch(onError);
@@ -2853,7 +2879,7 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
             boa_changed = true;
         }
         let minified_from = "decodeDracoFile(e,t,s,i,n=ot,r=()=>{}){";
-        let minified_hook = r#"if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const o=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e)),a=i||this.defaultAttributeTypes,c=[];for(const e of o.attributes){const A=a[e.name]||'Float32Array',p=globalThis[A]||Float32Array,f=new Float32Array(e.data),g=p===Float32Array?f:new p(f);c.push({name:e.name,array:g,itemSize:e.itemSize,vertexColorSpace:n})}const h=this._createGeometry({index:{array:new Uint32Array(o.index)},attributes:c});return Promise.resolve(h).then(t).catch(r)}catch(e){return Promise.reject(e).catch(r)}}"#;
+        let minified_hook = r#"if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const o=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e)),d=s||this.defaultAttributeIDs,a=i||this.defaultAttributeTypes,c=[];for(const e of o.attributes){let s=e.name;for(const a in d)if(typeof d[a]=='number'&&d[a]===e.attributeId){s=a;break}const u=a[s]||a[e.name]||'Float32Array',p=globalThis[u]||Float32Array,f=new Float32Array(e.data),g=p===Float32Array?f:new p(f);c.push({name:s,array:g,itemSize:e.itemSize,vertexColorSpace:n})}const h=this._createGeometry({index:o.pointCloud?null:{array:new Uint32Array(o.index)},attributes:c});return Promise.resolve(h).then(t).catch(r)}catch(e){return Promise.reject(e).catch(r)}}"#;
         if normalized.contains(minified_from)
             && !normalized.contains("new Uint8Array(e),a=i||this.defaultAttributeTypes")
         {
@@ -2874,7 +2900,7 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         boa_changed |= inject_minified_draco_preload_guard(&mut normalized);
         boa_changed |= inject_minified_draco_decode_hook(&mut normalized);
         let minified_geometry_marker = "decodeGeometry(e,t){";
-        let minified_geometry_hook = "decodeGeometry(e,t){if(globalThis.__hyperthreeNativeDracoAvailable===true){try{globalThis.__hyperthreeDracoNativeGeometryCalls=(globalThis.__hyperthreeDracoNativeGeometryCalls||0)+1;const __htNativeResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e));const __htRequestedTypes=t&&t.attributeTypes||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htNativeResult.attributes){const __htTypeName=__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htNativeAttribute.name,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:t&&t.vertexColorSpace});}return Promise.resolve(this._createGeometry({index:{array:new Uint32Array(__htNativeResult.index)},attributes:__htAttributes}));}catch(__htError){return Promise.reject(__htError);}}";
+        let minified_geometry_hook = "decodeGeometry(e,t){if(globalThis.__hyperthreeNativeDracoAvailable===true){try{globalThis.__hyperthreeDracoNativeGeometryCalls=(globalThis.__hyperthreeDracoNativeGeometryCalls||0)+1;const __htNativeResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e));const __htRequestedIDs=t&&t.attributeIDs||this.defaultAttributeIDs;const __htRequestedTypes=t&&t.attributeTypes||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htNativeResult.attributes){let __htAttributeName=__htNativeAttribute.name;for(const __htRequestedName in __htRequestedIDs){if(typeof __htRequestedIDs[__htRequestedName]==='number'&&__htRequestedIDs[__htRequestedName]===__htNativeAttribute.attributeId){__htAttributeName=__htRequestedName;break;}}const __htTypeName=__htRequestedTypes[__htAttributeName]||__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htAttributeName,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:t&&t.vertexColorSpace});}return Promise.resolve(this._createGeometry({index:__htNativeResult.pointCloud?null:{array:new Uint32Array(__htNativeResult.index)},attributes:__htAttributes}));}catch(__htError){return Promise.reject(__htError);}}";
         if normalized.contains(minified_geometry_marker)
             && !normalized.contains("__hyperthreeDracoNativeGeometryCalls")
         {

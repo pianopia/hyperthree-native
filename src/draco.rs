@@ -8,6 +8,7 @@ use draco_oxide_decoder::{Decoder, Geometry};
 #[derive(Debug, Clone)]
 pub struct DracoAttribute {
     pub name: String,
+    pub attribute_id: usize,
     pub item_size: usize,
     pub data: Vec<f32>,
 }
@@ -65,14 +66,14 @@ fn decode_attributes(attributes: &[Attribute]) -> Result<Vec<DracoAttribute>> {
     let mut decoded_attributes = Vec::new();
     let mut texcoord_index = 0;
     let mut color_index = 0;
+    let mut custom_index = 0;
     for attribute in attributes {
-        let Some(name) = semantic_name(
+        let name = semantic_name(
             attribute.get_attribute_type(),
             &mut texcoord_index,
             &mut color_index,
-        ) else {
-            continue;
-        };
+            &mut custom_index,
+        );
         let item_size = attribute.get_num_components();
         anyhow::ensure!(
             (1..=4).contains(&item_size),
@@ -81,7 +82,8 @@ fn decode_attributes(attributes: &[Attribute]) -> Result<Vec<DracoAttribute>> {
         let data = decode_attribute_values(attribute, item_size)
             .with_context(|| format!("failed to decode Draco attribute {name}"))?;
         decoded_attributes.push(DracoAttribute {
-            name: name.to_string(),
+            name: name.clone(),
+            attribute_id: attribute.get_id().as_usize(),
             item_size,
             data,
         });
@@ -103,32 +105,38 @@ fn semantic_name(
     attribute_type: AttributeType,
     texcoord_index: &mut usize,
     color_index: &mut usize,
-) -> Option<&'static str> {
+    custom_index: &mut usize,
+) -> String {
     match attribute_type {
-        AttributeType::Position => Some("position"),
-        AttributeType::Normal => Some("normal"),
-        AttributeType::Tangent => Some("tangent"),
+        AttributeType::Position => "position".to_string(),
+        AttributeType::Normal => "normal".to_string(),
+        AttributeType::Tangent => "tangent".to_string(),
         AttributeType::TextureCoordinate => {
-            let name = match *texcoord_index {
-                0 => "uv",
-                1 => "uv1",
-                _ => return None,
+            let name = if *texcoord_index == 0 {
+                "uv".to_string()
+            } else {
+                format!("uv{texcoord_index}")
             };
             *texcoord_index += 1;
-            Some(name)
+            name
         }
         AttributeType::Color => {
-            let name = match *color_index {
-                0 => "color",
-                1 => "color1",
-                _ => return None,
+            let name = if *color_index == 0 {
+                "color".to_string()
+            } else {
+                format!("color{color_index}")
             };
             *color_index += 1;
-            Some(name)
+            name
         }
-        AttributeType::Joint => Some("skinIndex"),
-        AttributeType::Weight => Some("skinWeight"),
-        AttributeType::Material | AttributeType::Custom | AttributeType::Invalid => None,
+        AttributeType::Joint => "skinIndex".to_string(),
+        AttributeType::Weight => "skinWeight".to_string(),
+        AttributeType::Material => "material".to_string(),
+        AttributeType::Custom | AttributeType::Invalid => {
+            let name = format!("custom{custom_index}");
+            *custom_index += 1;
+            name
+        }
     }
 }
 
@@ -176,7 +184,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::decode_geometry;
+    use super::{decode_geometry, semantic_name};
+    use draco_oxide_core::attribute::AttributeType;
 
     #[test]
     fn decodes_khronos_box_draco_stream() {
@@ -240,5 +249,92 @@ mod tests {
             .attributes
             .iter()
             .any(|attribute| attribute.name == "color"));
+        let mut ids = colored
+            .attributes
+            .iter()
+            .map(|attribute| attribute.attribute_id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), colored.attributes.len());
+    }
+
+    #[test]
+    fn names_all_standard_and_custom_attribute_channels() {
+        let mut texcoord_index = 0;
+        let mut color_index = 0;
+        let mut custom_index = 0;
+        assert_eq!(
+            semantic_name(
+                AttributeType::Position,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "position"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::TextureCoordinate,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "uv"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::TextureCoordinate,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "uv1"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::TextureCoordinate,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "uv2"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::Color,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "color"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::Color,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "color1"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::Custom,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "custom0"
+        );
+        assert_eq!(
+            semantic_name(
+                AttributeType::Invalid,
+                &mut texcoord_index,
+                &mut color_index,
+                &mut custom_index,
+            ),
+            "custom1"
+        );
     }
 }
