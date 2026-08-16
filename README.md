@@ -66,7 +66,7 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 - `.github/workflows/ci.yml`: macOS / Windows / LinuxのCI
 
 現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
-`HyperThreeNative.setClearColor()` / `setTriangleColor()`で描画状態を変更する
+`HyperThreeNative.setClearColor()`、`setCamera()`、`setCube()`で描画状態を変更する
 開発導線
 までを提供します。任意のブラウザ向けThree.jsゲームをそのまま動かすには、
 DOM/WebGPU APIバインディング、入力・音声、GPU Driven Culling、Indirect Draw、

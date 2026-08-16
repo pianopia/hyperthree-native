@@ -8,7 +8,10 @@ globalThis.HyperThreeNative = {
   setClearColor(r, g, b, a = 1) {
     __hyperthreeSetClearColor(r, g, b, a);
   },
-  setTriangleColor(index, r, g, b) {
-    __hyperthreeSetTriangleColor(index, r, g, b);
+  setCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
+    __hyperthreeSetCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
+  },
+  setCamera(px, py, pz, tx, ty, tz, fovY, near, far) {
+    __hyperthreeSetCamera(px, py, pz, tx, ty, tz, fovY, near, far);
   },
 };

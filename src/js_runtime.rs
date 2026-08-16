@@ -45,32 +45,62 @@ impl JsRuntime {
             )
             .map_err(|error| anyhow::anyhow!("failed to register clear-color binding: {error}"))?;
 
-        let vertex_state = render_state;
+        let cube_state = render_state.clone();
         context
-            .register_global_builtin_callable(
-                js_string!("__hyperthreeSetTriangleColor"),
-                4,
-                unsafe {
-                    NativeFunction::from_closure(move |_this, args, context| {
-                        let index = number_arg(args, 0, context)? as usize;
-                        let color = [
-                            number_arg(args, 1, context)?,
-                            number_arg(args, 2, context)?,
-                            number_arg(args, 3, context)?,
-                        ];
-                        vertex_state
-                            .lock()
-                            .map_err(|_| {
-                                JsNativeError::error().with_message("render state poisoned")
-                            })?
-                            .set_vertex_color(index, color);
-                        Ok(JsValue::undefined())
-                    })
-                },
-            )
-            .map_err(|error| {
-                anyhow::anyhow!("failed to register triangle-color binding: {error}")
-            })?;
+            .register_global_builtin_callable(js_string!("__hyperthreeSetCube"), 12, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let position = [
+                        number_arg(args, 0, context)?,
+                        number_arg(args, 1, context)?,
+                        number_arg(args, 2, context)?,
+                    ];
+                    let scale = [
+                        number_arg(args, 3, context)?,
+                        number_arg(args, 4, context)?,
+                        number_arg(args, 5, context)?,
+                    ];
+                    let rotation_y = number_arg(args, 6, context)?;
+                    let color = [
+                        number_arg(args, 7, context)?,
+                        number_arg(args, 8, context)?,
+                        number_arg(args, 9, context)?,
+                        number_arg(args, 10, context)?,
+                    ];
+                    let _reserved = number_arg(args, 11, context)?;
+                    cube_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("render state poisoned"))?
+                        .set_cube(position, scale, rotation_y, color);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register cube binding: {error}"))?;
+
+        let camera_state = render_state;
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeSetCamera"), 9, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let position = [
+                        number_arg(args, 0, context)?,
+                        number_arg(args, 1, context)?,
+                        number_arg(args, 2, context)?,
+                    ];
+                    let target = [
+                        number_arg(args, 3, context)?,
+                        number_arg(args, 4, context)?,
+                        number_arg(args, 5, context)?,
+                    ];
+                    let fov_y = number_arg(args, 6, context)?;
+                    let near = number_arg(args, 7, context)?;
+                    let far = number_arg(args, 8, context)?;
+                    camera_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("render state poisoned"))?
+                        .set_camera(position, target, fov_y, near, far);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register camera binding: {error}"))?;
 
         Ok(Self { context })
     }

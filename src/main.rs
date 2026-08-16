@@ -83,9 +83,10 @@ fn run_native(
         .expect("render state mutex should not be poisoned")
         .snapshot();
     log::info!(
-        "native bridge state: clear={:?}, triangle_colors={:?}",
+        "native bridge state: clear={:?}, cube={:?}, camera={:?}",
         snapshot.clear_color,
-        snapshot.vertex_colors
+        snapshot.cube,
+        snapshot.camera
     );
 
     if let Some(asset_path) = asset_path {

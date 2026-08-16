@@ -19,7 +19,7 @@ the HyperThree bridge, not the operating system backend.
 
 1. **Host abstraction**: move window title, size, input, clock, audio, and file
    paths behind platform-neutral Rust traits.
-2. **Backend smoke tests**: run the same clear-color and triangle-color bridge
+2. **Backend smoke tests**: run the same clear-color and camera/cube bridge
    test on macOS Metal, Windows DirectX 12/Vulkan, and Linux Vulkan/software.
 3. **Input and lifecycle**: normalize keyboard, mouse, gamepad, focus,
    suspend/resume, resize, fullscreen, and device-lost events.

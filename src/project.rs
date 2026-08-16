@@ -173,9 +173,8 @@ globalThis.HyperThreeGame = {
 };
 
 HyperThreeNative.setClearColor(0.015, 0.02, 0.05, 1.0);
-HyperThreeNative.setTriangleColor(0, 0.1, 0.95, 0.8);
-HyperThreeNative.setTriangleColor(1, 0.2, 0.4, 1.0);
-HyperThreeNative.setTriangleColor(2, 0.95, 0.3, 0.7);
+HyperThreeNative.setCamera(0, 0, 4, 0, 0, 0, 60, 0.1, 100);
+HyperThreeNative.setCube(0, 0, 0, 1.4, 1.4, 1.4, 0.55, 0.1, 0.8, 0.95, 1, 0);
 "#;
 
 const INIT_README: &str = r#"# My HyperThree Game
