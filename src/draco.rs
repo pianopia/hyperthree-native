@@ -226,4 +226,19 @@ mod tests {
             .iter()
             .any(|attribute| attribute.name == "position"));
     }
+
+    #[test]
+    fn decodes_official_point_cloud_fixtures() {
+        let colored = decode_geometry(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/third_party/draco/pc_kd_color.drc"
+        )))
+        .expect("official colored point cloud should decode");
+        assert!(colored.point_cloud);
+        assert!(!colored.indices.is_empty());
+        assert!(colored
+            .attributes
+            .iter()
+            .any(|attribute| attribute.name == "color"));
+    }
 }
