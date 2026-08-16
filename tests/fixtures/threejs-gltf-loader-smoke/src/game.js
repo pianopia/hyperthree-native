@@ -106,6 +106,7 @@ globalThis.__gltfComputeSmoke = false;
 globalThis.__gltfResourceDescriptorSmoke = false;
 globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfVideoFrameSmoke = false;
+globalThis.__gltfVideoElementSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfCanvasAlphaSmoke = false;
@@ -131,6 +132,17 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   device.queue.submit([readbackEncoder.finish()]);
   await device.queue.onSubmittedWorkDone();
   globalThis.__gltfQueueSyncSmoke = true;
+  const videoElement = document.createElement('video');
+  let videoFrameCallbackSeen = false;
+  videoElement.requestVideoFrameCallback((_now, metadata) => {
+    videoFrameCallbackSeen = metadata.width === 1 && metadata.height === 1;
+  });
+  videoElement.src = 'public/generated/texture.png';
+  await videoElement.play();
+  globalThis.__gltfVideoElementSmoke = videoElement.readyState >= videoElement.HAVE_CURRENT_DATA &&
+    videoElement.videoWidth === 1 && videoElement.videoHeight === 1 &&
+    videoElement.currentFrame?.codedWidth === 1 && videoFrameCallbackSeen;
+  videoElement.pause();
   const externalFrame = new VideoFrame({
     width: 1,
     height: 1,
@@ -586,6 +598,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfExternalTextureSmoke ||
       !globalThis.__gltfVideoFrameSmoke ||
+      !globalThis.__gltfVideoElementSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke ||
       !globalThis.__gltfCanvasAlphaSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");

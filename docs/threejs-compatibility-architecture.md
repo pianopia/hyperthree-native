@@ -120,7 +120,11 @@ Three.jsの標準`VideoFrameTexture.setFrame()`へ渡し、同じframeを
 `importExternalTexture()`でnative GPUへサンプリングするfixtureを検証済みである。
 これはデコーダーから渡されたRGBA frameを受け取る契約であり、H.264/VP9/AV1等のcodec実装を
 JavaScriptへ持ち込むものではない。native decoderと連続frame schedulingは、OSごとの
-メディアバックエンドを選定した後にこの境界へ接続する。
+メディアバックエンドを選定した後にこの境界へ接続する。現時点では、nativeの画像decodeで
+作れるRGBA frameを`HTMLVideoElement`の`videoWidth`、`videoHeight`、`readyState`、
+`play()`/`pause()`、`currentFrame`へ接続し、`requestVideoFrameCallback()`を同じRAF時計で
+配送する。これによりThree.jsの`VideoTexture`が使うframe更新契約を先に固定しているが、
+動画codec、音声トラック、シーク、複数frameのnative decodeは未実装である。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。

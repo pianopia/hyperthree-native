@@ -4253,7 +4253,146 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   globalThis.GPUMapMode = globalThis.GPUMapMode || { READ: 1, WRITE: 2 };
   globalThis.GPUFeatureName = globalThis.GPUFeatureName || { 'timestamp-query': 'timestamp-query' };
   globalThis.HTMLCanvasElement = globalThis.HTMLCanvasElement || function HTMLCanvasElement() {};
-  globalThis.HTMLVideoElement = globalThis.HTMLVideoElement || function HTMLVideoElement() {};
+  globalThis.HTMLVideoElement = globalThis.HTMLVideoElement || class HTMLVideoElement {
+    constructor() {
+      this.__listeners = new Map();
+      this.__frameCallbacks = new Map();
+      this.__nextFrameCallbackId = 0;
+      this.__presentedFrames = 0;
+      this.__loadPromise = Promise.resolve();
+      this.__loadToken = 0;
+      this.__rafId = null;
+      this._src = '';
+      this.currentFrame = null;
+      this.data = new Uint8Array(0);
+      this.videoWidth = 0;
+      this.videoHeight = 0;
+      this.currentTime = 0;
+      this.duration = 0;
+      this.readyState = 0;
+      this.networkState = 0;
+      this.paused = true;
+      this.ended = false;
+      this.loop = false;
+      this.autoplay = false;
+      this.muted = false;
+      this.volume = 1;
+      this.playbackRate = 1;
+      this.crossOrigin = null;
+      this.preload = 'auto';
+      this.HAVE_NOTHING = 0;
+      this.HAVE_METADATA = 1;
+      this.HAVE_CURRENT_DATA = 2;
+      this.HAVE_FUTURE_DATA = 3;
+      this.HAVE_ENOUGH_DATA = 4;
+    }
+    get src() { return this._src; }
+    set src(value) { this._src = String(value); this.load(); }
+    get currentSrc() { return this._src; }
+    get width() { return this.videoWidth; }
+    get height() { return this.videoHeight; }
+    addEventListener(type, listener) {
+      if (typeof listener !== 'function') return;
+      const listeners = this.__listeners.get(type) || new Set();
+      listeners.add(listener);
+      this.__listeners.set(type, listeners);
+    }
+    removeEventListener(type, listener) { this.__listeners.get(type)?.delete(listener); }
+    dispatchEvent(event) {
+      for (const listener of this.__listeners.get(event.type) || []) listener.call(this, event);
+      const handler = this['on' + event.type];
+      if (typeof handler === 'function') handler.call(this, event);
+      return !event.defaultPrevented;
+    }
+    setAttribute(name, value) { if (String(name).toLowerCase() === 'src') this.src = value; }
+    getAttribute(name) { return String(name).toLowerCase() === 'src' ? this._src : null; }
+    canPlayType(type) { return String(type || '').startsWith('image/') ? 'probably' : ''; }
+    load() {
+      const token = ++this.__loadToken;
+      this.readyState = this._src ? 1 : 0;
+      this.networkState = this._src ? 2 : 0;
+      this.ended = false;
+      if (!this._src) return;
+      this.__loadPromise = fetch(this._src)
+        .then(response => response.blob())
+        .then(blob => createImageBitmap(blob))
+        .then(bitmap => {
+          if (token !== this.__loadToken) { bitmap.close(); return; }
+          this.currentFrame?.close();
+          this.videoWidth = bitmap.width;
+          this.videoHeight = bitmap.height;
+          this.data = new Uint8Array(bitmap.data);
+          this.currentFrame = new VideoFrame(bitmap, { timestamp: Math.round(this.currentTime * 1000000) });
+          this.duration = 0;
+          this.readyState = 2;
+          this.networkState = 1;
+          this.dispatchEvent(new Event('loadedmetadata'));
+          this.dispatchEvent(new Event('loadeddata'));
+          this.dispatchEvent(new Event('canplay'));
+        })
+        .catch(error => {
+          if (token !== this.__loadToken) return;
+          this.readyState = 0;
+          this.networkState = 3;
+          this.dispatchEvent(Object.assign(new Event('error'), { error }));
+        });
+    }
+    __notifyFrame() {
+      if (!this.currentFrame) return;
+      this.__presentedFrames += 1;
+      const metadata = {
+        mediaTime: this.currentTime,
+        presentedFrames: this.__presentedFrames,
+        expectedDisplayTime: performance.now(),
+        width: this.videoWidth,
+        height: this.videoHeight,
+      };
+      const callbacks = [...this.__frameCallbacks.values()];
+      this.__frameCallbacks.clear();
+      for (const callback of callbacks) callback(performance.now(), metadata);
+    }
+    __pump() {
+      if (this.paused || !this.currentFrame || this.__rafId !== null) return;
+      this.__rafId = requestAnimationFrame(() => {
+        this.__rafId = null;
+        if (this.paused) return;
+        this.__notifyFrame();
+        if (this.loop) {
+          this.currentTime = 0;
+          this.__pump();
+        } else {
+          this.ended = true;
+          this.paused = true;
+          this.dispatchEvent(new Event('ended'));
+        }
+      });
+    }
+    play() {
+      this.paused = false;
+      this.ended = false;
+      return this.__loadPromise.then(() => {
+        if (this.readyState >= this.HAVE_CURRENT_DATA) {
+          this.dispatchEvent(new Event('play'));
+          this.__notifyFrame();
+          this.__pump();
+        }
+      });
+    }
+    pause() {
+      this.paused = true;
+      if (this.__rafId !== null) cancelAnimationFrame(this.__rafId);
+      this.__rafId = null;
+      this.dispatchEvent(new Event('pause'));
+    }
+    requestVideoFrameCallback(callback) {
+      if (typeof callback !== 'function') throw new TypeError('video frame callback must be a function');
+      const id = ++this.__nextFrameCallbackId;
+      this.__frameCallbacks.set(id, callback);
+      this.__pump();
+      return id;
+    }
+    cancelVideoFrameCallback(id) { this.__frameCallbacks.delete(id); }
+  };
   globalThis.HTMLImageElement = globalThis.HTMLImageElement || function HTMLImageElement() {};
   globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
   globalThis.VideoFrame = globalThis.VideoFrame || function VideoFrame() {};
@@ -4401,7 +4540,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   Object.setPrototypeOf(nativeCanvas, HTMLCanvasElement.prototype);
   globalThis.__hyperthreeNativeCanvas = nativeCanvas;
   globalThis.document = globalThis.document || {
-    createElement(name) { return name === 'canvas' ? nativeCanvas : { style: {}, addEventListener() {}, removeEventListener() {} }; },
+    createElement(name) {
+      if (name === 'canvas') return nativeCanvas;
+      if (name === 'video') return new HTMLVideoElement();
+      return { style: {}, addEventListener() {}, removeEventListener() {} };
+    },
     createElementNS(_namespace, name) { return this.createElement(name); },
     body: { appendChild() {}, removeChild() {} },
   };
