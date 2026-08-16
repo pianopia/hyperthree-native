@@ -93,6 +93,112 @@ fn runtime_root(script: &Path) -> PathBuf {
     }
 }
 
+struct GameHost {
+    renderer: Option<Renderer>,
+    runtime: Option<JsRuntime>,
+    script: PathBuf,
+    asset_root: PathBuf,
+    render_state: bridge::SharedRenderState,
+    input_state: bridge::SharedInputState,
+    restart_count: u32,
+}
+
+impl GameHost {
+    fn start_session(
+        window: Arc<winit::window::Window>,
+        script: &Path,
+        asset_root: &Path,
+        render_state: bridge::SharedRenderState,
+        input_state: bridge::SharedInputState,
+        restart_count: u32,
+    ) -> Result<(Renderer, JsRuntime)> {
+        let renderer = pollster::block_on(Renderer::new(window, render_state.clone()))?;
+        let mut runtime = JsRuntime::new_with_gpu(
+            render_state,
+            input_state,
+            asset_root,
+            Some(renderer.webgpu_context()),
+        )?;
+        runtime.execute_source(include_str!("../js/three-bridge.js"))?;
+        runtime.execute_source(&format!(
+            "globalThis.__hyperthreeNativeRestartCount={restart_count};"
+        ))?;
+        runtime.execute_file(script)?;
+        let initial_size = renderer.window.inner_size();
+        runtime.set_window_size(initial_size.width, initial_size.height)?;
+        runtime.execute_start()?;
+        log::info!("executed JavaScript entry point: {}", script.display());
+        Ok((renderer, runtime))
+    }
+
+    fn new(
+        window: Arc<winit::window::Window>,
+        script: PathBuf,
+        asset_root: PathBuf,
+        render_state: bridge::SharedRenderState,
+        input_state: bridge::SharedInputState,
+    ) -> Result<Self> {
+        let (renderer, runtime) = Self::start_session(
+            window,
+            &script,
+            &asset_root,
+            render_state.clone(),
+            input_state.clone(),
+            0,
+        )?;
+        Ok(Self {
+            renderer: Some(renderer),
+            runtime: Some(runtime),
+            script,
+            asset_root,
+            render_state,
+            input_state,
+            restart_count: 0,
+        })
+    }
+
+    fn renderer(&self) -> &Renderer {
+        self.renderer
+            .as_ref()
+            .expect("game renderer is initialized")
+    }
+
+    fn renderer_mut(&mut self) -> &mut Renderer {
+        self.renderer
+            .as_mut()
+            .expect("game renderer is initialized")
+    }
+
+    fn runtime_mut(&mut self) -> &mut JsRuntime {
+        self.runtime.as_mut().expect("game runtime is initialized")
+    }
+
+    fn restart_after_device_loss(&mut self) -> Result<()> {
+        if self.restart_count >= 3 {
+            anyhow::bail!("native GPU device lost repeatedly during restart")
+        }
+        self.restart_count += 1;
+        let window = self.renderer().window.clone();
+        if let Some(runtime) = self.runtime.as_mut() {
+            let _ = runtime.execute_shutdown();
+        }
+        drop(self.runtime.take());
+        drop(self.renderer.take());
+        let (renderer, runtime) = Self::start_session(
+            window,
+            &self.script,
+            &self.asset_root,
+            self.render_state.clone(),
+            self.input_state.clone(),
+            self.restart_count,
+        )?;
+        self.renderer = Some(renderer);
+        self.runtime = Some(runtime);
+        log::warn!("restarted native game session after device loss");
+        Ok(())
+    }
+}
+
 fn run_native(
     script: PathBuf,
     asset_path: Option<PathBuf>,
@@ -123,19 +229,13 @@ fn run_native(
             .build(&event_loop)
             .context("failed to create native window")?,
     );
-    let mut renderer = pollster::block_on(Renderer::new(window, render_state.clone()))?;
-    let mut runtime = JsRuntime::new_with_gpu(
+    let mut host = GameHost::new(
+        window,
+        script,
+        asset_root,
         render_state.clone(),
         input_state.clone(),
-        asset_root,
-        Some(renderer.webgpu_context()),
     )?;
-    runtime.execute_source(include_str!("../js/three-bridge.js"))?;
-    runtime.execute_file(&script)?;
-    let initial_size = renderer.window.inner_size();
-    runtime.set_window_size(initial_size.width, initial_size.height)?;
-    runtime.execute_start()?;
-    log::info!("executed JavaScript entry point: {}", script.display());
     let snapshot = render_state
         .lock()
         .expect("render state mutex should not be poisoned")
@@ -164,18 +264,27 @@ fn run_native(
     event_loop.run(move |event, event_loop| {
         event_loop.set_control_flow(ControlFlow::Poll);
         match event {
-            Event::WindowEvent { window_id, event } if window_id == renderer.window.id() => {
+            Event::WindowEvent { window_id, event } if window_id == host.renderer().window.id() => {
                 match event {
                     WindowEvent::CloseRequested => {
-                        if let Err(error) = runtime.execute_shutdown() {
+                        if let Err(error) = host.runtime_mut().execute_shutdown() {
                             log::error!("JavaScript shutdown callback failed: {error:#}");
                         }
                         event_loop.exit();
                     }
                     WindowEvent::Resized(size) => {
-                        renderer.resize(size);
-                        if let Err(error) = runtime.set_window_size(size.width, size.height) {
-                            log::error!("JavaScript resize event failed: {error:#}");
+                        if host
+                            .renderer()
+                            .webgpu_context()
+                            .device_lost_message()
+                            .is_none()
+                        {
+                            host.renderer_mut().resize(size);
+                            if let Err(error) =
+                                host.runtime_mut().set_window_size(size.width, size.height)
+                            {
+                                log::error!("JavaScript resize event failed: {error:#}");
+                            }
                         }
                     }
                     WindowEvent::Focused(false) => {
@@ -206,16 +315,33 @@ fn run_native(
                                 .set_mouse_button(button, state.is_pressed());
                         }
                     }
-                    WindowEvent::RedrawRequested => match renderer.render() {
-                        Ok(()) => {}
-                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            renderer.resize(renderer.window.inner_size())
+                    WindowEvent::RedrawRequested => {
+                        if host
+                            .renderer()
+                            .webgpu_context()
+                            .device_lost_message()
+                            .is_none()
+                        {
+                            match host.renderer_mut().render() {
+                                Ok(()) => {}
+                                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                    let size = host.renderer().window.inner_size();
+                                    if host
+                                        .renderer()
+                                        .webgpu_context()
+                                        .device_lost_message()
+                                        .is_none()
+                                    {
+                                        host.renderer_mut().resize(size)
+                                    }
+                                }
+                                Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+                                Err(wgpu::SurfaceError::Timeout) => {
+                                    log::warn!("surface timeout; skipping frame")
+                                }
+                            }
                         }
-                        Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                        Err(wgpu::SurfaceError::Timeout) => {
-                            log::warn!("surface timeout; skipping frame")
-                        }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -223,20 +349,24 @@ fn run_native(
                 let now = Instant::now();
                 let delta_seconds = now.duration_since(last_frame).as_secs_f64().clamp(0.0, 0.1);
                 last_frame = now;
-                if let Err(error) = runtime.execute_frame(delta_seconds) {
+                if let Err(error) = host.runtime_mut().execute_frame(delta_seconds) {
                     log::error!("JavaScript frame update failed: {error:#}");
-                    if let Err(shutdown_error) = runtime.execute_shutdown() {
+                    if let Err(shutdown_error) = host.runtime_mut().execute_shutdown() {
                         log::error!("JavaScript shutdown callback failed: {shutdown_error:#}");
                     }
                     event_loop.exit();
-                } else if let Some(message) = renderer.webgpu_context().device_lost_message() {
-                    log::error!("native GPU device lost; stopping frame loop: {message}");
-                    if let Err(shutdown_error) = runtime.execute_shutdown() {
-                        log::error!("JavaScript shutdown callback failed: {shutdown_error:#}");
+                } else if let Some(message) = host.renderer().webgpu_context().device_lost_message()
+                {
+                    log::warn!("native GPU device lost; restarting game session: {message}");
+                    if let Err(error) = host.restart_after_device_loss() {
+                        log::error!("native GPU session restart failed: {error:#}");
+                        event_loop.exit();
+                    } else {
+                        last_frame = Instant::now();
+                        host.renderer().window.request_redraw();
                     }
-                    event_loop.exit();
                 } else {
-                    renderer.window.request_redraw();
+                    host.renderer().window.request_redraw();
                 }
             }
             _ => {}

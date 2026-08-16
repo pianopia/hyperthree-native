@@ -85,10 +85,12 @@ shadow、equirectangular environment、MRT、indirect drawとそのGPU readback�
 スモーク済みである。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
 Promiseへ配送し、error scopeはnative `push_error_scope`/`pop_error_scope`へ接続した。
 ホストは同じloss recordをフレーム境界で検出し、無効化されたGPUへ追加submitせず安全に
-停止する。device／全GPUリソースの再生成とゲーム状態復元は次の段階である。
+停止する。`tests/device-loss-restart-smoke.js`では同じWindow上でnative device、Renderer、
+JS sessionを再生成してentry pointを再実行するところまで検証済みである。ゲームJSのヒープ状態
+は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
-Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はdevice-lost／
-present lifecycle、KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
+Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はpresent lifecycle、
+KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
 
 ### Phase B: Three.js renderer実行

@@ -287,6 +287,7 @@ impl NativeWebGpuContext {
     /// The JS `GPUDevice.lost` promise uses the same record; the host uses it
     /// to stop before submitting more work to an invalid device.
     pub fn device_lost_message(&self) -> Option<String> {
+        self.device.poll(wgpu::Maintain::Poll);
         self.device_events
             .lost
             .lock()

@@ -38,6 +38,7 @@
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
+- [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
