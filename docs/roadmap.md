@@ -22,6 +22,8 @@
 - [x] Three.js matrixWorld transport for animated object transforms
 - [x] Three.js Points to native billboard particle effect path
 - [x] Native WebGPU navigator/device resource smoke path (buffer, texture, shader module)
+- [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
+- [ ] GPUCanvasContext and native swapchain presentation shared with the Three.js renderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
 - [ ] glTF/KTX2 zero-copy texture decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite

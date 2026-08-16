@@ -59,9 +59,10 @@ WebGPU IDLを実装する。各GPUオブジェクトはRust側の世代付きハ
 JS GCとは独立して参照数と破棄を管理する。
 
 現在はこのフェーズの初期段階として、Boa上の`navigator.gpu`、adapter/device、
-`GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadのnative smoke pathを
-実装済みである。次はBindGroup、Pipeline、CommandEncoderを実GPUのrender/compute
-passへ接続し、現在の独自PBRパスと同じswapchainを共有する。
+`GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadに加え、BindGroup、
+Pipeline、CommandEncoder、RenderPass、ComputePassのnative実行sliceを実装済みで
+ある。次は`GPUCanvasContext`をネイティブwindowのswapchainへ接続し、Three.jsの
+WebGPURendererが生成したコマンドをそのまま画面へpresentする。
 
 ### Phase B: Three.js renderer実行
 

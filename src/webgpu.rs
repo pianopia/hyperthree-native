@@ -1,5 +1,6 @@
 use anyhow::Result;
 use boa_engine::{js_string, Context, JsArgs, JsNativeError, JsResult, JsValue, NativeFunction};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -17,7 +18,146 @@ struct Resources {
     next_id: u64,
     buffers: HashMap<u64, wgpu::Buffer>,
     textures: HashMap<u64, wgpu::Texture>,
+    texture_views: HashMap<u64, wgpu::TextureView>,
+    samplers: HashMap<u64, wgpu::Sampler>,
     shader_modules: HashMap<u64, wgpu::ShaderModule>,
+    bind_group_layouts: HashMap<u64, wgpu::BindGroupLayout>,
+    pipeline_layouts: HashMap<u64, wgpu::PipelineLayout>,
+    bind_groups: HashMap<u64, wgpu::BindGroup>,
+    render_pipelines: HashMap<u64, wgpu::RenderPipeline>,
+    compute_pipelines: HashMap<u64, wgpu::ComputePipeline>,
+    command_encoders: HashMap<u64, CommandEncoderState>,
+    open_passes: HashMap<u64, OpenPass>,
+    command_buffers: HashMap<u64, wgpu::CommandBuffer>,
+}
+
+#[derive(Debug, Default)]
+struct CommandEncoderState {
+    commands: Vec<RecordedCommand>,
+}
+
+#[derive(Debug)]
+enum RecordedCommand {
+    RenderPass(RenderPassState),
+    ComputePass(ComputePassState),
+}
+
+#[derive(Debug)]
+enum OpenPass {
+    Render {
+        encoder: u64,
+        state: RenderPassState,
+    },
+    Compute {
+        encoder: u64,
+        state: ComputePassState,
+    },
+}
+
+#[derive(Debug)]
+struct RenderPassState {
+    colors: Vec<ColorAttachmentState>,
+    depth_stencil: Option<DepthStencilAttachmentState>,
+    commands: Vec<RenderCommand>,
+}
+
+#[derive(Debug)]
+struct ComputePassState {
+    commands: Vec<ComputeCommand>,
+}
+
+#[derive(Debug)]
+struct ColorAttachmentState {
+    view: u64,
+    resolve_target: Option<u64>,
+    load_op: String,
+    store_op: String,
+    clear_value: [f64; 4],
+}
+
+#[derive(Debug)]
+struct DepthStencilAttachmentState {
+    view: u64,
+    depth_load_op: String,
+    depth_store_op: String,
+    depth_clear_value: f32,
+}
+
+#[derive(Debug)]
+enum RenderCommand {
+    SetPipeline(u64),
+    SetBindGroup {
+        index: u32,
+        bind_group: u64,
+        dynamic_offsets: Vec<u32>,
+    },
+    SetVertexBuffer {
+        slot: u32,
+        buffer: u64,
+        offset: u64,
+        size: Option<u64>,
+    },
+    SetIndexBuffer {
+        buffer: u64,
+        offset: u64,
+        format: String,
+    },
+    SetViewport {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min_depth: f32,
+        max_depth: f32,
+    },
+    SetScissorRect {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
+    SetBlendConstant([f64; 4]),
+    SetStencilReference(u32),
+    Draw {
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+    },
+    DrawIndexed {
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        base_vertex: i32,
+        first_instance: u32,
+    },
+    DrawIndirect {
+        buffer: u64,
+        offset: u64,
+    },
+    DrawIndexedIndirect {
+        buffer: u64,
+        offset: u64,
+    },
+}
+
+#[derive(Debug)]
+enum ComputeCommand {
+    SetPipeline(u64),
+    SetBindGroup {
+        index: u32,
+        bind_group: u64,
+        dynamic_offsets: Vec<u32>,
+    },
+    DispatchWorkgroups {
+        x: u32,
+        y: u32,
+        z: u32,
+    },
+    DispatchWorkgroupsIndirect {
+        buffer: u64,
+        offset: u64,
+    },
 }
 
 pub type SharedNativeWebGpuContext = Arc<NativeWebGpuContext>;
@@ -177,6 +317,664 @@ impl NativeWebGpuContext {
             .insert(id, shader);
         Ok(id)
     }
+
+    fn create_texture_view(&self, texture_id: u64) -> Result<u64, String> {
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let texture = resources
+            .textures
+            .get(&texture_id)
+            .ok_or_else(|| format!("unknown GPUTexture handle {texture_id}"))?;
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .texture_views
+            .insert(id, view);
+        Ok(id)
+    }
+
+    fn create_sampler(&self, descriptor: &Value) -> Result<u64, String> {
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("hyperthree-js-sampler"),
+            address_mode_u: address_mode(json_string(descriptor, "addressModeU")),
+            address_mode_v: address_mode(json_string(descriptor, "addressModeV")),
+            address_mode_w: address_mode(json_string(descriptor, "addressModeW")),
+            mag_filter: filter_mode(json_string(descriptor, "magFilter")),
+            min_filter: filter_mode(json_string(descriptor, "minFilter")),
+            mipmap_filter: filter_mode(json_string(descriptor, "mipmapFilter")),
+            lod_min_clamp: json_f32(descriptor, "lodMinClamp", 0.0),
+            lod_max_clamp: json_f32(descriptor, "lodMaxClamp", 32.0),
+            compare: Some(compare_function(json_string(descriptor, "compare"))),
+            anisotropy_clamp: json_u16(descriptor, "maxAnisotropy", 1),
+            border_color: None,
+        });
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .samplers
+            .insert(id, sampler);
+        Ok(id)
+    }
+
+    fn create_bind_group_layout(&self, descriptor: &Value) -> Result<u64, String> {
+        let entries = descriptor
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "GPUBindGroupLayout.entries must be an array".to_string())?;
+        let entries = entries
+            .iter()
+            .map(bind_group_layout_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        let layout = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("hyperthree-js-bind-group-layout"),
+                entries: &entries,
+            });
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .bind_group_layouts
+            .insert(id, layout);
+        Ok(id)
+    }
+
+    fn create_pipeline_layout(&self, descriptor: &Value) -> Result<u64, String> {
+        let ids = descriptor
+            .get("bindGroupLayouts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "GPUPipelineLayout.bindGroupLayouts must be an array".to_string())?
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| "invalid bind group layout handle".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let layouts = ids
+            .iter()
+            .map(|id| {
+                resources
+                    .bind_group_layouts
+                    .get(id)
+                    .ok_or_else(|| format!("unknown GPUBindGroupLayout handle {id}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hyperthree-js-pipeline-layout"),
+                bind_group_layouts: &layouts,
+                push_constant_ranges: &[],
+            });
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .pipeline_layouts
+            .insert(id, layout);
+        Ok(id)
+    }
+
+    fn create_bind_group(&self, descriptor: &Value) -> Result<u64, String> {
+        let layout_id = descriptor
+            .get("layout")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "GPUBindGroup.layout must be a native handle".to_string())?;
+        let entries = descriptor
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "GPUBindGroup.entries must be an array".to_string())?;
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let layout = resources
+            .bind_group_layouts
+            .get(&layout_id)
+            .ok_or_else(|| format!("unknown GPUBindGroupLayout handle {layout_id}"))?;
+        let mut native_entries = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let binding = json_u32(entry, "binding", 0);
+            let resource = entry
+                .get("resource")
+                .ok_or_else(|| "GPUBindGroup entry has no resource".to_string())?;
+            native_entries.push(wgpu::BindGroupEntry {
+                binding,
+                resource: binding_resource(resource, &resources)?,
+            });
+        }
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hyperthree-js-bind-group"),
+            layout,
+            entries: &native_entries,
+        });
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .bind_groups
+            .insert(id, bind_group);
+        Ok(id)
+    }
+
+    fn create_render_pipeline(&self, descriptor: &Value) -> Result<u64, String> {
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let layout = descriptor
+            .get("layout")
+            .and_then(Value::as_u64)
+            .map(|id| {
+                resources
+                    .pipeline_layouts
+                    .get(&id)
+                    .ok_or_else(|| format!("unknown GPUPipelineLayout handle {id}"))
+            })
+            .transpose()?;
+        let vertex = descriptor
+            .get("vertex")
+            .ok_or_else(|| "GPURenderPipeline.vertex is required".to_string())?;
+        let vertex_module = resources
+            .shader_modules
+            .get(&json_u64(vertex, "module")?)
+            .ok_or_else(|| "unknown vertex GPUShaderModule handle".to_string())?;
+        let vertex_buffers_owned = vertex
+            .get("buffers")
+            .and_then(Value::as_array)
+            .map(|buffers| {
+                buffers
+                    .iter()
+                    .map(vertex_buffer_layout_owned)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let vertex_buffers = vertex_buffers_owned
+            .iter()
+            .map(|layout| wgpu::VertexBufferLayout {
+                array_stride: layout.array_stride,
+                step_mode: layout.step_mode,
+                attributes: &layout.attributes,
+            })
+            .collect::<Vec<_>>();
+        let vertex_entry = json_string(vertex, "entryPoint").unwrap_or_else(|| "main".to_string());
+        let fragment = descriptor
+            .get("fragment")
+            .filter(|value| !value.is_null());
+        let fragment_module = fragment
+            .map(|fragment| {
+                resources
+                    .shader_modules
+                    .get(&json_u64(fragment, "module")?)
+                    .ok_or_else(|| "unknown fragment GPUShaderModule handle".to_string())
+            })
+            .transpose()?;
+        let fragment_entry = fragment
+            .and_then(|value| json_string(value, "entryPoint"))
+            .unwrap_or_else(|| "main".to_string());
+        let targets = fragment
+            .and_then(|value| value.get("targets"))
+            .and_then(Value::as_array)
+            .map(|targets| {
+                targets
+                    .iter()
+                    .map(color_target_state)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let vertex_state = wgpu::VertexState {
+            module: vertex_module,
+            entry_point: &vertex_entry,
+            buffers: &vertex_buffers,
+            compilation_options: Default::default(),
+        };
+        let fragment_state = fragment_module.map(|module| wgpu::FragmentState {
+            module,
+            entry_point: &fragment_entry,
+            targets: &targets,
+            compilation_options: Default::default(),
+        });
+        let depth_stencil = descriptor
+            .get("depthStencil")
+            .filter(|value| !value.is_null())
+            .map(depth_stencil_state)
+            .transpose()?;
+        let primitive = primitive_state(descriptor.get("primitive"));
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("hyperthree-js-render-pipeline"),
+                layout,
+                vertex: vertex_state,
+                fragment: fragment_state,
+                primitive,
+                depth_stencil,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .render_pipelines
+            .insert(id, pipeline);
+        Ok(id)
+    }
+
+    fn create_compute_pipeline(&self, descriptor: &Value) -> Result<u64, String> {
+        let resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let layout = descriptor
+            .get("layout")
+            .and_then(Value::as_u64)
+            .map(|id| {
+                resources
+                    .pipeline_layouts
+                    .get(&id)
+                    .ok_or_else(|| format!("unknown GPUPipelineLayout handle {id}"))
+            })
+            .transpose()?;
+        let compute = descriptor
+            .get("compute")
+            .ok_or_else(|| "GPUComputePipeline.compute is required".to_string())?;
+        let module = resources
+            .shader_modules
+            .get(&json_u64(compute, "module")?)
+            .ok_or_else(|| "unknown compute GPUShaderModule handle".to_string())?;
+        let entry_point = json_string(compute, "entryPoint").unwrap_or_else(|| "main".to_string());
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("hyperthree-js-compute-pipeline"),
+                layout,
+                module,
+                entry_point: &entry_point,
+                compilation_options: Default::default(),
+            });
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .compute_pipelines
+            .insert(id, pipeline);
+        Ok(id)
+    }
+
+    fn create_command_encoder(&self) -> Result<u64, String> {
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .command_encoders
+            .insert(id, CommandEncoderState::default());
+        Ok(id)
+    }
+
+    fn begin_render_pass(&self, encoder_id: u64, descriptor: &Value) -> Result<u64, String> {
+        let colors = descriptor
+            .get("colorAttachments")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "GPURenderPassDescriptor.colorAttachments must be an array".to_string())?
+            .iter()
+            .map(color_attachment_state)
+            .collect::<Result<Vec<_>, _>>()?;
+        let depth_stencil = descriptor
+            .get("depthStencilAttachment")
+            .filter(|value| !value.is_null())
+            .map(depth_stencil_attachment_state)
+            .transpose()?;
+        let pass_id = self.allocate_id()?;
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        if !resources.command_encoders.contains_key(&encoder_id) {
+            return Err(format!("unknown GPUCommandEncoder handle {encoder_id}"));
+        }
+        resources.open_passes.insert(
+            pass_id,
+            OpenPass::Render {
+                encoder: encoder_id,
+                state: RenderPassState {
+                    colors,
+                    depth_stencil,
+                    commands: Vec::new(),
+                },
+            },
+        );
+        Ok(pass_id)
+    }
+
+    fn begin_compute_pass(&self, encoder_id: u64) -> Result<u64, String> {
+        let pass_id = self.allocate_id()?;
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        if !resources.command_encoders.contains_key(&encoder_id) {
+            return Err(format!("unknown GPUCommandEncoder handle {encoder_id}"));
+        }
+        resources.open_passes.insert(
+            pass_id,
+            OpenPass::Compute {
+                encoder: encoder_id,
+                state: ComputePassState {
+                    commands: Vec::new(),
+                },
+            },
+        );
+        Ok(pass_id)
+    }
+
+    fn end_pass(&self, pass_id: u64) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let pass = resources
+            .open_passes
+            .remove(&pass_id)
+            .ok_or_else(|| format!("unknown or already ended GPURenderPass handle {pass_id}"))?;
+        let (encoder_id, command) = match pass {
+            OpenPass::Render { encoder, state } => (encoder, RecordedCommand::RenderPass(state)),
+            OpenPass::Compute { encoder, state } => (encoder, RecordedCommand::ComputePass(state)),
+        };
+        let encoder = resources
+            .command_encoders
+            .get_mut(&encoder_id)
+            .ok_or_else(|| format!("unknown GPUCommandEncoder handle {encoder_id}"))?;
+        encoder.commands.push(command);
+        Ok(())
+    }
+
+    fn push_render_command(&self, pass_id: u64, command: RenderCommand) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        match resources.open_passes.get_mut(&pass_id) {
+            Some(OpenPass::Render { state, .. }) => {
+                state.commands.push(command);
+                Ok(())
+            }
+            Some(OpenPass::Compute { .. }) => Err(format!(
+                "GPUComputePass handle {pass_id} cannot receive render commands"
+            )),
+            None => Err(format!("unknown or ended GPURenderPass handle {pass_id}")),
+        }
+    }
+
+    fn push_compute_command(&self, pass_id: u64, command: ComputeCommand) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        match resources.open_passes.get_mut(&pass_id) {
+            Some(OpenPass::Compute { state, .. }) => {
+                state.commands.push(command);
+                Ok(())
+            }
+            Some(OpenPass::Render { .. }) => Err(format!(
+                "GPURenderPass handle {pass_id} cannot receive compute commands"
+            )),
+            None => Err(format!("unknown or ended GPUComputePass handle {pass_id}")),
+        }
+    }
+
+    fn record_pass_command(
+        &self,
+        pass_id: u64,
+        operation: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
+        let values = payload
+            .as_array()
+            .ok_or_else(|| "WebGPU pass command payload must be an array".to_string())?;
+        match operation {
+            "setPipeline" => {
+                let id = value_u64(values, 0)?;
+                let resources = self
+                    .resources
+                    .lock()
+                    .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+                if resources.render_pipelines.contains_key(&id) {
+                    drop(resources);
+                    self.push_render_command(pass_id, RenderCommand::SetPipeline(id))
+                } else if resources.compute_pipelines.contains_key(&id) {
+                    drop(resources);
+                    self.push_compute_command(pass_id, ComputeCommand::SetPipeline(id))
+                } else {
+                    Err(format!("unknown pipeline handle {id}"))
+                }
+            }
+            "setBindGroup" => {
+                let index = value_u32(values, 0)?;
+                let bind_group = value_u64(values, 1)?;
+                let dynamic_offsets = values
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| "dynamic offsets must be an array".to_string())?
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_u64()
+                            .map(|value| value as u32)
+                            .ok_or_else(|| "dynamic offset must be an integer".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let is_render = self
+                    .resources
+                    .lock()
+                    .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+                    .open_passes
+                    .get(&pass_id)
+                    .map(|pass| matches!(pass, OpenPass::Render { .. }))
+                    .ok_or_else(|| format!("unknown or ended pass handle {pass_id}"))?;
+                if is_render {
+                    self.push_render_command(
+                        pass_id,
+                        RenderCommand::SetBindGroup {
+                            index,
+                            bind_group,
+                            dynamic_offsets,
+                        },
+                    )
+                } else {
+                    self.push_compute_command(
+                        pass_id,
+                        ComputeCommand::SetBindGroup {
+                            index,
+                            bind_group,
+                            dynamic_offsets,
+                        },
+                    )
+                }
+            }
+            "setVertexBuffer" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetVertexBuffer {
+                    slot: value_u32(values, 0)?,
+                    buffer: value_u64(values, 1)?,
+                    offset: value_u64_or(values, 2, 0)?,
+                    size: values.get(3).and_then(Value::as_u64),
+                },
+            ),
+            "setIndexBuffer" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetIndexBuffer {
+                    buffer: value_u64(values, 0)?,
+                    offset: value_u64_or(values, 1, 0)?,
+                    format: values
+                        .get(2)
+                        .and_then(Value::as_str)
+                        .unwrap_or("uint32")
+                        .to_string(),
+                },
+            ),
+            "setViewport" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetViewport {
+                    x: value_f32(values, 0)?,
+                    y: value_f32(values, 1)?,
+                    width: value_f32(values, 2)?,
+                    height: value_f32(values, 3)?,
+                    min_depth: value_f32(values, 4)?,
+                    max_depth: value_f32(values, 5)?,
+                },
+            ),
+            "setScissorRect" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetScissorRect {
+                    x: value_u32(values, 0)?,
+                    y: value_u32(values, 1)?,
+                    width: value_u32(values, 2)?,
+                    height: value_u32(values, 3)?,
+                },
+            ),
+            "setBlendConstant" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetBlendConstant([
+                    value_f64(values, 0)?,
+                    value_f64(values, 1)?,
+                    value_f64(values, 2)?,
+                    value_f64(values, 3)?,
+                ]),
+            ),
+            "setStencilReference" => self.push_render_command(
+                pass_id,
+                RenderCommand::SetStencilReference(value_u32(values, 0)?),
+            ),
+            "draw" => self.push_render_command(
+                pass_id,
+                RenderCommand::Draw {
+                    vertex_count: value_u32(values, 0)?,
+                    instance_count: value_u32_or(values, 1, 1)?,
+                    first_vertex: value_u32_or(values, 2, 0)?,
+                    first_instance: value_u32_or(values, 3, 0)?,
+                },
+            ),
+            "drawIndexed" => self.push_render_command(
+                pass_id,
+                RenderCommand::DrawIndexed {
+                    index_count: value_u32(values, 0)?,
+                    instance_count: value_u32_or(values, 1, 1)?,
+                    first_index: value_u32_or(values, 2, 0)?,
+                    base_vertex: value_i32_or(values, 3, 0)?,
+                    first_instance: value_u32_or(values, 4, 0)?,
+                },
+            ),
+            "drawIndirect" => self.push_render_command(
+                pass_id,
+                RenderCommand::DrawIndirect {
+                    buffer: value_u64(values, 0)?,
+                    offset: value_u64_or(values, 1, 0)?,
+                },
+            ),
+            "drawIndexedIndirect" => self.push_render_command(
+                pass_id,
+                RenderCommand::DrawIndexedIndirect {
+                    buffer: value_u64(values, 0)?,
+                    offset: value_u64_or(values, 1, 0)?,
+                },
+            ),
+            "dispatchWorkgroups" => self.push_compute_command(
+                pass_id,
+                ComputeCommand::DispatchWorkgroups {
+                    x: value_u32(values, 0)?,
+                    y: value_u32_or(values, 1, 1)?,
+                    z: value_u32_or(values, 2, 1)?,
+                },
+            ),
+            "dispatchWorkgroupsIndirect" => self.push_compute_command(
+                pass_id,
+                ComputeCommand::DispatchWorkgroupsIndirect {
+                    buffer: value_u64(values, 0)?,
+                    offset: value_u64_or(values, 1, 0)?,
+                },
+            ),
+            _ => Err(format!("unsupported WebGPU pass command {operation}")),
+        }
+    }
+
+    fn finish_command_encoder(&self, encoder_id: u64) -> Result<u64, String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        if resources.open_passes.values().any(|pass| match pass {
+            OpenPass::Render { encoder, .. } | OpenPass::Compute { encoder, .. } => {
+                *encoder == encoder_id
+            }
+        }) {
+            return Err("GPUCommandEncoder has an open pass".to_string());
+        }
+        let state = resources
+            .command_encoders
+            .remove(&encoder_id)
+            .ok_or_else(|| format!("unknown GPUCommandEncoder handle {encoder_id}"))?;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hyperthree-js-command-encoder"),
+            });
+        for command in state.commands {
+            match command {
+                RecordedCommand::RenderPass(pass) => {
+                    encode_render_pass(&mut encoder, &resources, pass)?;
+                }
+                RecordedCommand::ComputePass(pass) => {
+                    encode_compute_pass(&mut encoder, &resources, pass)?;
+                }
+            }
+        }
+        let command_buffer = encoder.finish();
+        drop(resources);
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .command_buffers
+            .insert(id, command_buffer);
+        Ok(id)
+    }
+
+    fn submit(&self, command_buffer_ids: &[u64]) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let mut command_buffers = Vec::with_capacity(command_buffer_ids.len());
+        for id in command_buffer_ids {
+            command_buffers.push(
+                resources
+                    .command_buffers
+                    .remove(id)
+                    .ok_or_else(|| format!("unknown GPUCommandBuffer handle {id}"))?,
+            );
+        }
+        self.queue.submit(command_buffers);
+        Ok(())
+    }
 }
 
 pub fn register_bindings(
@@ -280,11 +1078,178 @@ pub fn register_bindings(
         },
     )?;
 
+    let texture_view_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuCreateTextureView",
+        1,
+        move |_this, args, context| {
+            let texture_id = number_arg(args, 0, context)? as u64;
+            texture_view_gpu
+                .create_texture_view(texture_id)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let sampler_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateSampler",
+        sampler_gpu,
+        |gpu, descriptor| gpu.create_sampler(descriptor),
+    )?;
+
+    let bind_group_layout_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateBindGroupLayout",
+        bind_group_layout_gpu,
+        |gpu, descriptor| gpu.create_bind_group_layout(descriptor),
+    )?;
+
+    let pipeline_layout_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreatePipelineLayout",
+        pipeline_layout_gpu,
+        |gpu, descriptor| gpu.create_pipeline_layout(descriptor),
+    )?;
+
+    let bind_group_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateBindGroup",
+        bind_group_gpu,
+        |gpu, descriptor| gpu.create_bind_group(descriptor),
+    )?;
+
+    let render_pipeline_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateRenderPipeline",
+        render_pipeline_gpu,
+        |gpu, descriptor| gpu.create_render_pipeline(descriptor),
+    )?;
+
+    let compute_pipeline_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateComputePipeline",
+        compute_pipeline_gpu,
+        |gpu, descriptor| gpu.create_compute_pipeline(descriptor),
+    )?;
+
+    let encoder_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuCreateCommandEncoder",
+        0,
+        move |_this, _args, _context| {
+            encoder_gpu
+                .create_command_encoder()
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let begin_render_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuBeginRenderPass",
+        2,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            let descriptor = json_arg(args, 1, context)?;
+            begin_render_gpu
+                .begin_render_pass(encoder_id, &descriptor)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let begin_compute_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuBeginComputePass",
+        1,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            begin_compute_gpu
+                .begin_compute_pass(encoder_id)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let pass_command_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuPassCommand",
+        3,
+        move |_this, args, context| {
+            let pass_id = number_arg(args, 0, context)? as u64;
+            let operation = string_arg(args, 1, context)?;
+            let payload = json_arg(args, 2, context)?;
+            pass_command_gpu
+                .record_pass_command(pass_id, &operation, &payload)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let end_pass_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuEndPass",
+        1,
+        move |_this, args, context| {
+            let pass_id = number_arg(args, 0, context)? as u64;
+            end_pass_gpu
+                .end_pass(pass_id)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let finish_encoder_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuFinishCommandEncoder",
+        1,
+        move |_this, args, context| {
+            let encoder_id = number_arg(args, 0, context)? as u64;
+            finish_encoder_gpu
+                .finish_command_encoder(encoder_id)
+                .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let submit_gpu = gpu;
     register(
         context,
         "__hyperthreeWebGpuSubmit",
-        0,
-        |_this, _args, _context| Ok(JsValue::undefined()),
+        1,
+        move |_this, args, context| {
+            let ids = json_arg(args, 0, context)?
+                .as_array()
+                .ok_or_else(|| {
+                    JsNativeError::typ().with_message("command buffers must be an array")
+                })?
+                .iter()
+                .map(|value| {
+                    value.as_u64().ok_or_else(|| {
+                        JsNativeError::typ()
+                            .with_message("command buffer handle must be an integer")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            submit_gpu
+                .submit(&ids)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
     )?;
 
     context
@@ -303,6 +1268,737 @@ where
         })
         .map_err(|error| anyhow::anyhow!("failed to register WebGPU binding {name}: {error}"))?;
     Ok(())
+}
+
+fn register_json_resource<F>(
+    context: &mut Context,
+    name: &str,
+    gpu: SharedNativeWebGpuContext,
+    create: F,
+) -> Result<()>
+where
+    F: Fn(&NativeWebGpuContext, &Value) -> Result<u64, String> + 'static,
+{
+    register(context, name, 1, move |_this, args, context| {
+        let descriptor = json_arg(args, 0, context)?;
+        create(&gpu, &descriptor)
+            .map(JsValue::from)
+            .map_err(native_error)
+    })
+}
+
+fn json_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<Value> {
+    let source = string_arg(args, index, context)?;
+    serde_json::from_str(&source).map_err(|error| {
+        JsNativeError::syntax()
+            .with_message(format!("invalid WebGPU descriptor JSON: {error}"))
+            .into()
+    })
+}
+
+fn encode_render_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    resources: &Resources,
+    state: RenderPassState,
+) -> Result<(), String> {
+    let color_attachments = state
+        .colors
+        .iter()
+        .map(|attachment| {
+            let view = resources
+                .texture_views
+                .get(&attachment.view)
+                .ok_or_else(|| format!("unknown GPUTextureView handle {}", attachment.view))?;
+            let resolve_target = attachment
+                .resolve_target
+                .map(|id| {
+                    resources
+                        .texture_views
+                        .get(&id)
+                        .ok_or_else(|| format!("unknown resolve GPUTextureView handle {id}"))
+                })
+                .transpose()?;
+            Ok(Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target,
+                ops: wgpu::Operations {
+                    load: color_load_op(&attachment.load_op, attachment.clear_value),
+                    store: store_op(&attachment.store_op),
+                },
+            }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let depth_stencil_attachment = state
+        .depth_stencil
+        .as_ref()
+        .map(|attachment| {
+            let view = resources
+                .texture_views
+                .get(&attachment.view)
+                .ok_or_else(|| {
+                    format!("unknown depth GPUTextureView handle {}", attachment.view)
+                })?;
+            Ok::<wgpu::RenderPassDepthStencilAttachment<'_>, String>(
+                wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: depth_load_op(
+                            &attachment.depth_load_op,
+                            attachment.depth_clear_value,
+                        ),
+                        store: store_op(&attachment.depth_store_op),
+                    }),
+                    stencil_ops: None,
+                },
+            )
+        })
+        .transpose()?;
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("hyperthree-js-render-pass"),
+        color_attachments: &color_attachments,
+        depth_stencil_attachment,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    for command in state.commands {
+        match command {
+            RenderCommand::SetPipeline(id) => {
+                let pipeline = resources
+                    .render_pipelines
+                    .get(&id)
+                    .ok_or_else(|| format!("unknown GPURenderPipeline handle {id}"))?;
+                pass.set_pipeline(pipeline);
+            }
+            RenderCommand::SetBindGroup {
+                index,
+                bind_group,
+                dynamic_offsets,
+            } => {
+                let bind_group = resources
+                    .bind_groups
+                    .get(&bind_group)
+                    .ok_or_else(|| format!("unknown GPUBindGroup handle {bind_group}"))?;
+                pass.set_bind_group(index, bind_group, &dynamic_offsets);
+            }
+            RenderCommand::SetVertexBuffer {
+                slot,
+                buffer,
+                offset,
+                size,
+            } => {
+                let buffer = resources
+                    .buffers
+                    .get(&buffer)
+                    .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                let slice = size
+                    .map(|size| buffer.slice(offset..offset + size))
+                    .unwrap_or_else(|| buffer.slice(offset..));
+                pass.set_vertex_buffer(slot, slice);
+            }
+            RenderCommand::SetIndexBuffer {
+                buffer,
+                offset,
+                format,
+            } => {
+                let buffer = resources
+                    .buffers
+                    .get(&buffer)
+                    .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                pass.set_index_buffer(buffer.slice(offset..), index_format(&format));
+            }
+            RenderCommand::SetViewport {
+                x,
+                y,
+                width,
+                height,
+                min_depth,
+                max_depth,
+            } => pass.set_viewport(x, y, width, height, min_depth, max_depth),
+            RenderCommand::SetScissorRect {
+                x,
+                y,
+                width,
+                height,
+            } => pass.set_scissor_rect(x, y, width, height),
+            RenderCommand::SetBlendConstant(value) => {
+                pass.set_blend_constant(wgpu::Color {
+                    r: value[0],
+                    g: value[1],
+                    b: value[2],
+                    a: value[3],
+                });
+            }
+            RenderCommand::SetStencilReference(value) => pass.set_stencil_reference(value),
+            RenderCommand::Draw {
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            } => pass.draw(
+                first_vertex..first_vertex + vertex_count,
+                first_instance..first_instance + instance_count,
+            ),
+            RenderCommand::DrawIndexed {
+                index_count,
+                instance_count,
+                first_index,
+                base_vertex,
+                first_instance,
+            } => pass.draw_indexed(
+                first_index..first_index + index_count,
+                base_vertex,
+                first_instance..first_instance + instance_count,
+            ),
+            RenderCommand::DrawIndirect { buffer, offset } => {
+                let buffer = resources
+                    .buffers
+                    .get(&buffer)
+                    .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                pass.draw_indirect(buffer, offset);
+            }
+            RenderCommand::DrawIndexedIndirect { buffer, offset } => {
+                let buffer = resources
+                    .buffers
+                    .get(&buffer)
+                    .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                pass.draw_indexed_indirect(buffer, offset);
+            }
+        }
+    }
+    drop(pass);
+    Ok(())
+}
+
+fn encode_compute_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    resources: &Resources,
+    state: ComputePassState,
+) -> Result<(), String> {
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some("hyperthree-js-compute-pass"),
+        timestamp_writes: None,
+    });
+    for command in state.commands {
+        match command {
+            ComputeCommand::SetPipeline(id) => {
+                let pipeline = resources
+                    .compute_pipelines
+                    .get(&id)
+                    .ok_or_else(|| format!("unknown GPUComputePipeline handle {id}"))?;
+                pass.set_pipeline(pipeline);
+            }
+            ComputeCommand::SetBindGroup {
+                index,
+                bind_group,
+                dynamic_offsets,
+            } => {
+                let bind_group = resources
+                    .bind_groups
+                    .get(&bind_group)
+                    .ok_or_else(|| format!("unknown GPUBindGroup handle {bind_group}"))?;
+                pass.set_bind_group(index, bind_group, &dynamic_offsets);
+            }
+            ComputeCommand::DispatchWorkgroups { x, y, z } => pass.dispatch_workgroups(x, y, z),
+            ComputeCommand::DispatchWorkgroupsIndirect { buffer, offset } => {
+                let buffer = resources
+                    .buffers
+                    .get(&buffer)
+                    .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                pass.dispatch_workgroups_indirect(buffer, offset);
+            }
+        }
+    }
+    drop(pass);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct OwnedVertexBufferLayout {
+    array_stride: wgpu::BufferAddress,
+    step_mode: wgpu::VertexStepMode,
+    attributes: Vec<wgpu::VertexAttribute>,
+}
+
+fn bind_group_layout_entry(value: &Value) -> Result<wgpu::BindGroupLayoutEntry, String> {
+    let binding = json_u32(value, "binding", 0);
+    let visibility = shader_stages(json_u32(value, "visibility", 0));
+    let ty = if let Some(buffer) = value.get("buffer") {
+        wgpu::BindingType::Buffer {
+            ty: match json_string(buffer, "type").as_deref().unwrap_or("uniform") {
+                "storage" => wgpu::BufferBindingType::Storage { read_only: false },
+                "read-only-storage" => wgpu::BufferBindingType::Storage { read_only: true },
+                _ => wgpu::BufferBindingType::Uniform,
+            },
+            has_dynamic_offset: json_bool(buffer, "hasDynamicOffset", false),
+            min_binding_size: non_zero_u64(json_u64_or(buffer, "minBindingSize", 0)),
+        }
+    } else if let Some(sampler) = value.get("sampler") {
+        wgpu::BindingType::Sampler(
+            match json_string(sampler, "type")
+                .as_deref()
+                .unwrap_or("filtering")
+            {
+                "non-filtering" => wgpu::SamplerBindingType::NonFiltering,
+                "comparison" => wgpu::SamplerBindingType::Comparison,
+                _ => wgpu::SamplerBindingType::Filtering,
+            },
+        )
+    } else if let Some(texture) = value.get("texture") {
+        wgpu::BindingType::Texture {
+            sample_type: match json_string(texture, "sampleType")
+                .as_deref()
+                .unwrap_or("float")
+            {
+                "unfilterable-float" => wgpu::TextureSampleType::Float { filterable: false },
+                "depth" => wgpu::TextureSampleType::Depth,
+                "sint" => wgpu::TextureSampleType::Sint,
+                "uint" => wgpu::TextureSampleType::Uint,
+                _ => wgpu::TextureSampleType::Float { filterable: true },
+            },
+            view_dimension: texture_view_dimension(json_string(texture, "viewDimension")),
+            multisampled: json_bool(texture, "multisampled", false),
+        }
+    } else if let Some(storage_texture) = value.get("storageTexture") {
+        wgpu::BindingType::StorageTexture {
+            access: match json_string(storage_texture, "access")
+                .as_deref()
+                .unwrap_or("write-only")
+            {
+                "read-only" => wgpu::StorageTextureAccess::ReadOnly,
+                "read-write" => wgpu::StorageTextureAccess::ReadWrite,
+                _ => wgpu::StorageTextureAccess::WriteOnly,
+            },
+            format: texture_format(
+                json_string(storage_texture, "format")
+                    .as_deref()
+                    .unwrap_or("rgba8unorm"),
+            ),
+            view_dimension: texture_view_dimension(json_string(storage_texture, "viewDimension")),
+        }
+    } else {
+        return Err(format!("unsupported bind group layout entry {binding}"));
+    };
+    Ok(wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty,
+        count: None,
+    })
+}
+
+fn binding_resource<'a>(
+    value: &Value,
+    resources: &'a Resources,
+) -> Result<wgpu::BindingResource<'a>, String> {
+    match json_string(value, "kind").as_deref() {
+        Some("buffer") => {
+            let id = json_u64(value, "buffer")?;
+            let buffer = resources
+                .buffers
+                .get(&id)
+                .ok_or_else(|| format!("unknown GPUBuffer handle {id}"))?;
+            Ok(wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer,
+                offset: json_u64_or(value, "offset", 0),
+                size: non_zero_u64(json_u64_or(value, "size", 0)),
+            }))
+        }
+        Some("textureView") => {
+            let id = json_u64(value, "view")?;
+            let view = resources
+                .texture_views
+                .get(&id)
+                .ok_or_else(|| format!("unknown GPUTextureView handle {id}"))?;
+            Ok(wgpu::BindingResource::TextureView(view))
+        }
+        Some("sampler") => {
+            let id = json_u64(value, "sampler")?;
+            let sampler = resources
+                .samplers
+                .get(&id)
+                .ok_or_else(|| format!("unknown GPUSampler handle {id}"))?;
+            Ok(wgpu::BindingResource::Sampler(sampler))
+        }
+        _ => Err("unsupported GPUBindGroup resource".to_string()),
+    }
+}
+
+fn vertex_buffer_layout_owned(value: &Value) -> Result<OwnedVertexBufferLayout, String> {
+    let attributes = value
+        .get("attributes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GPUVertexBufferLayout.attributes must be an array".to_string())?
+        .iter()
+        .map(|attribute| {
+            Ok(wgpu::VertexAttribute {
+                format: vertex_format(
+                    json_string(attribute, "format")
+                        .as_deref()
+                        .unwrap_or("float32x4"),
+                ),
+                offset: json_u64_or(attribute, "offset", 0),
+                shader_location: json_u32(attribute, "shaderLocation", 0),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(OwnedVertexBufferLayout {
+        array_stride: json_u64_or(value, "arrayStride", 0),
+        step_mode: match json_string(value, "stepMode")
+            .as_deref()
+            .unwrap_or("vertex")
+        {
+            "instance" => wgpu::VertexStepMode::Instance,
+            _ => wgpu::VertexStepMode::Vertex,
+        },
+        attributes,
+    })
+}
+
+fn color_target_state(value: &Value) -> Result<Option<wgpu::ColorTargetState>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(wgpu::ColorTargetState {
+        format: texture_format(
+            json_string(value, "format")
+                .as_deref()
+                .unwrap_or("bgra8unorm-srgb"),
+        ),
+        blend: value.get("blend").map(blend_state).transpose()?,
+        write_mask: wgpu::ColorWrites::from_bits_truncate(
+            json_u64_or(value, "writeMask", 15) as u32
+        ),
+    }))
+}
+
+fn blend_state(value: &Value) -> Result<wgpu::BlendState, String> {
+    Ok(wgpu::BlendState {
+        color: blend_component(value.get("color").unwrap_or(value))?,
+        alpha: blend_component(value.get("alpha").unwrap_or(value))?,
+    })
+}
+
+fn blend_component(value: &Value) -> Result<wgpu::BlendComponent, String> {
+    Ok(wgpu::BlendComponent {
+        src_factor: blend_factor(json_string(value, "srcFactor").as_deref().unwrap_or("one")),
+        dst_factor: blend_factor(json_string(value, "dstFactor").as_deref().unwrap_or("zero")),
+        operation: blend_operation(json_string(value, "operation").as_deref().unwrap_or("add")),
+    })
+}
+
+fn depth_stencil_state(value: &Value) -> Result<wgpu::DepthStencilState, String> {
+    Ok(wgpu::DepthStencilState {
+        format: texture_format(
+            json_string(value, "format")
+                .as_deref()
+                .unwrap_or("depth24plus"),
+        ),
+        depth_write_enabled: json_bool(value, "depthWriteEnabled", true),
+        depth_compare: compare_function(json_string(value, "depthCompare")),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    })
+}
+
+fn primitive_state(value: Option<&Value>) -> wgpu::PrimitiveState {
+    let value = value.unwrap_or(&Value::Null);
+    wgpu::PrimitiveState {
+        topology: match json_string(value, "topology")
+            .as_deref()
+            .unwrap_or("triangle-list")
+        {
+            "point-list" => wgpu::PrimitiveTopology::PointList,
+            "line-list" => wgpu::PrimitiveTopology::LineList,
+            "line-strip" => wgpu::PrimitiveTopology::LineStrip,
+            "triangle-strip" => wgpu::PrimitiveTopology::TriangleStrip,
+            "triangle-fan" => wgpu::PrimitiveTopology::TriangleList,
+            _ => wgpu::PrimitiveTopology::TriangleList,
+        },
+        strip_index_format: json_string(value, "stripIndexFormat")
+            .map(|format| index_format(&format)),
+        front_face: match json_string(value, "frontFace").as_deref().unwrap_or("ccw") {
+            "cw" => wgpu::FrontFace::Cw,
+            _ => wgpu::FrontFace::Ccw,
+        },
+        cull_mode: match json_string(value, "cullMode").as_deref() {
+            Some("front") => Some(wgpu::Face::Front),
+            Some("back") => Some(wgpu::Face::Back),
+            _ => None,
+        },
+        unclipped_depth: false,
+        polygon_mode: wgpu::PolygonMode::Fill,
+        conservative: false,
+    }
+}
+
+fn color_attachment_state(value: &Value) -> Result<ColorAttachmentState, String> {
+    Ok(ColorAttachmentState {
+        view: json_u64(value, "view")?,
+        resolve_target: value.get("resolveTarget").and_then(Value::as_u64),
+        load_op: json_string(value, "loadOp").unwrap_or_else(|| "load".to_string()),
+        store_op: json_string(value, "storeOp").unwrap_or_else(|| "store".to_string()),
+        clear_value: json_color(value.get("clearValue")),
+    })
+}
+
+fn depth_stencil_attachment_state(value: &Value) -> Result<DepthStencilAttachmentState, String> {
+    Ok(DepthStencilAttachmentState {
+        view: json_u64(value, "view")?,
+        depth_load_op: json_string(value, "depthLoadOp").unwrap_or_else(|| "load".to_string()),
+        depth_store_op: json_string(value, "depthStoreOp").unwrap_or_else(|| "store".to_string()),
+        depth_clear_value: json_f32(value, "depthClearValue", 1.0),
+    })
+}
+
+fn color_load_op(operation: &str, clear: [f64; 4]) -> wgpu::LoadOp<wgpu::Color> {
+    match operation {
+        "clear" => wgpu::LoadOp::Clear(wgpu::Color {
+            r: clear[0],
+            g: clear[1],
+            b: clear[2],
+            a: clear[3],
+        }),
+        _ => wgpu::LoadOp::Load,
+    }
+}
+
+fn depth_load_op(operation: &str, clear: f32) -> wgpu::LoadOp<f32> {
+    match operation {
+        "clear" => wgpu::LoadOp::Clear(clear),
+        _ => wgpu::LoadOp::Load,
+    }
+}
+
+fn store_op(operation: &str) -> wgpu::StoreOp {
+    match operation {
+        "discard" => wgpu::StoreOp::Discard,
+        _ => wgpu::StoreOp::Store,
+    }
+}
+
+fn shader_stages(bits: u32) -> wgpu::ShaderStages {
+    let mut stages = wgpu::ShaderStages::empty();
+    if bits & 1 != 0 {
+        stages |= wgpu::ShaderStages::VERTEX;
+    }
+    if bits & 2 != 0 {
+        stages |= wgpu::ShaderStages::FRAGMENT;
+    }
+    if bits & 4 != 0 {
+        stages |= wgpu::ShaderStages::COMPUTE;
+    }
+    stages
+}
+
+fn texture_view_dimension(value: Option<String>) -> wgpu::TextureViewDimension {
+    match value.as_deref().unwrap_or("2d") {
+        "1d" => wgpu::TextureViewDimension::D1,
+        "2d-array" => wgpu::TextureViewDimension::D2Array,
+        "cube" => wgpu::TextureViewDimension::Cube,
+        "cube-array" => wgpu::TextureViewDimension::CubeArray,
+        "3d" => wgpu::TextureViewDimension::D3,
+        _ => wgpu::TextureViewDimension::D2,
+    }
+}
+
+fn vertex_format(value: &str) -> wgpu::VertexFormat {
+    match value {
+        "float32" => wgpu::VertexFormat::Float32,
+        "float32x2" => wgpu::VertexFormat::Float32x2,
+        "float32x3" => wgpu::VertexFormat::Float32x3,
+        "uint32" => wgpu::VertexFormat::Uint32,
+        "uint32x2" => wgpu::VertexFormat::Uint32x2,
+        "uint32x3" => wgpu::VertexFormat::Uint32x3,
+        "uint32x4" => wgpu::VertexFormat::Uint32x4,
+        "sint32" => wgpu::VertexFormat::Sint32,
+        "sint32x2" => wgpu::VertexFormat::Sint32x2,
+        "sint32x3" => wgpu::VertexFormat::Sint32x3,
+        "sint32x4" => wgpu::VertexFormat::Sint32x4,
+        "unorm8x4" => wgpu::VertexFormat::Unorm8x4,
+        "snorm8x4" => wgpu::VertexFormat::Snorm8x4,
+        "uint8x4" => wgpu::VertexFormat::Uint8x4,
+        "sint8x4" => wgpu::VertexFormat::Sint8x4,
+        "unorm16x2" => wgpu::VertexFormat::Unorm16x2,
+        "unorm16x4" => wgpu::VertexFormat::Unorm16x4,
+        "snorm16x2" => wgpu::VertexFormat::Snorm16x2,
+        "snorm16x4" => wgpu::VertexFormat::Snorm16x4,
+        "uint16x2" => wgpu::VertexFormat::Uint16x2,
+        "uint16x4" => wgpu::VertexFormat::Uint16x4,
+        "sint16x2" => wgpu::VertexFormat::Sint16x2,
+        "sint16x4" => wgpu::VertexFormat::Sint16x4,
+        _ => wgpu::VertexFormat::Float32x4,
+    }
+}
+
+fn index_format(value: &str) -> wgpu::IndexFormat {
+    match value {
+        "uint16" => wgpu::IndexFormat::Uint16,
+        _ => wgpu::IndexFormat::Uint32,
+    }
+}
+
+fn address_mode(value: Option<String>) -> wgpu::AddressMode {
+    match value.as_deref().unwrap_or("clamp-to-edge") {
+        "repeat" => wgpu::AddressMode::Repeat,
+        "mirror-repeat" => wgpu::AddressMode::MirrorRepeat,
+        _ => wgpu::AddressMode::ClampToEdge,
+    }
+}
+
+fn filter_mode(value: Option<String>) -> wgpu::FilterMode {
+    match value.as_deref().unwrap_or("nearest") {
+        "linear" => wgpu::FilterMode::Linear,
+        _ => wgpu::FilterMode::Nearest,
+    }
+}
+
+fn compare_function(value: Option<String>) -> wgpu::CompareFunction {
+    match value.as_deref() {
+        Some("never") => wgpu::CompareFunction::Never,
+        Some("less") => wgpu::CompareFunction::Less,
+        Some("equal") => wgpu::CompareFunction::Equal,
+        Some("less-equal") => wgpu::CompareFunction::LessEqual,
+        Some("greater") => wgpu::CompareFunction::Greater,
+        Some("not-equal") => wgpu::CompareFunction::NotEqual,
+        Some("greater-equal") => wgpu::CompareFunction::GreaterEqual,
+        Some("always") => wgpu::CompareFunction::Always,
+        _ => wgpu::CompareFunction::Always,
+    }
+}
+
+fn blend_factor(value: &str) -> wgpu::BlendFactor {
+    match value {
+        "zero" => wgpu::BlendFactor::Zero,
+        "src" => wgpu::BlendFactor::Src,
+        "one-minus-src" => wgpu::BlendFactor::OneMinusSrc,
+        "src-alpha" => wgpu::BlendFactor::SrcAlpha,
+        "one-minus-src-alpha" => wgpu::BlendFactor::OneMinusSrcAlpha,
+        "dst" => wgpu::BlendFactor::Dst,
+        "one-minus-dst" => wgpu::BlendFactor::OneMinusDst,
+        "dst-alpha" => wgpu::BlendFactor::DstAlpha,
+        "one-minus-dst-alpha" => wgpu::BlendFactor::OneMinusDstAlpha,
+        "src-alpha-saturated" => wgpu::BlendFactor::SrcAlphaSaturated,
+        "constant" => wgpu::BlendFactor::Constant,
+        "one-minus-constant" => wgpu::BlendFactor::OneMinusConstant,
+        _ => wgpu::BlendFactor::One,
+    }
+}
+
+fn blend_operation(value: &str) -> wgpu::BlendOperation {
+    match value {
+        "subtract" => wgpu::BlendOperation::Subtract,
+        "reverse-subtract" => wgpu::BlendOperation::ReverseSubtract,
+        "min" => wgpu::BlendOperation::Min,
+        "max" => wgpu::BlendOperation::Max,
+        _ => wgpu::BlendOperation::Add,
+    }
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn json_bool(value: &Value, key: &str, default: bool) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn json_u64(value: &Value, key: &str) -> Result<u64, String> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("WebGPU descriptor field {key} must be an integer"))
+}
+
+fn json_u64_or(value: &Value, key: &str, default: u64) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(default)
+}
+
+fn json_u32(value: &Value, key: &str, default: u32) -> u32 {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value as u32)
+        .unwrap_or(default)
+}
+
+fn json_u16(value: &Value, key: &str, default: u16) -> u16 {
+    json_u32(value, key, default as u32) as u16
+}
+
+fn json_f32(value: &Value, key: &str, default: f32) -> f32 {
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
+        .unwrap_or(default)
+}
+
+fn json_color(value: Option<&Value>) -> [f64; 4] {
+    let value = value.and_then(Value::as_object);
+    [
+        value
+            .and_then(|value| value.get("r"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        value
+            .and_then(|value| value.get("g"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        value
+            .and_then(|value| value.get("b"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        value
+            .and_then(|value| value.get("a"))
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0),
+    ]
+}
+
+fn non_zero_u64(value: u64) -> Option<std::num::NonZeroU64> {
+    std::num::NonZeroU64::new(value)
+}
+
+fn value_u64(values: &[Value], index: usize) -> Result<u64, String> {
+    values
+        .get(index)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("WebGPU pass argument {index} must be an integer"))
+}
+
+fn value_u64_or(values: &[Value], index: usize, default: u64) -> Result<u64, String> {
+    Ok(values.get(index).and_then(Value::as_u64).unwrap_or(default))
+}
+
+fn value_u32(values: &[Value], index: usize) -> Result<u32, String> {
+    Ok(value_u64(values, index)? as u32)
+}
+
+fn value_u32_or(values: &[Value], index: usize, default: u32) -> Result<u32, String> {
+    Ok(values
+        .get(index)
+        .and_then(Value::as_u64)
+        .map(|value| value as u32)
+        .unwrap_or(default))
+}
+
+fn value_i32_or(values: &[Value], index: usize, default: i32) -> Result<i32, String> {
+    Ok(values
+        .get(index)
+        .and_then(Value::as_i64)
+        .map(|value| value as i32)
+        .unwrap_or(default))
+}
+
+fn value_f64(values: &[Value], index: usize) -> Result<f64, String> {
+    values
+        .get(index)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| format!("WebGPU pass argument {index} must be numeric"))
+}
+
+fn value_f32(values: &[Value], index: usize) -> Result<f32, String> {
+    Ok(value_f64(values, index)? as f32)
 }
 
 fn number_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<f64> {
@@ -406,7 +2102,11 @@ fn texture_format(format: &str) -> wgpu::TextureFormat {
     match format {
         "bgra8unorm" => wgpu::TextureFormat::Bgra8Unorm,
         "bgra8unorm-srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
+        "rgba8unorm-srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        "depth24plus" => wgpu::TextureFormat::Depth24Plus,
+        "depth24plus-stencil8" => wgpu::TextureFormat::Depth24PlusStencil8,
+        "depth32float" => wgpu::TextureFormat::Depth32Float,
         _ => wgpu::TextureFormat::Rgba8Unorm,
     }
 }
@@ -415,21 +2115,79 @@ const WEBGPU_BOOTSTRAP: &str = r#"
 (() => {
   if (globalThis.navigator?.gpu) return;
   const makeHandle = (id, methods = {}) => Object.assign({ __hyperthreeHandle: id }, methods);
+  const handleId = value => value?.__hyperthreeHandle ?? value;
+  const descriptorJson = value => JSON.stringify(value ?? {});
   const bufferUsage = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128 };
   const textureUsage = { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 };
   globalThis.GPUBufferUsage = globalThis.GPUBufferUsage || bufferUsage;
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || textureUsage;
   const makeBuffer = (descriptor = {}) => {
-    const id = __hyperthreeWebGpuCreateBuffer(descriptor.size ?? 1, descriptor.usage ?? 0);
+    const id = __hyperthreeWebGpuCreateBuffer(descriptor.size ?? 1, descriptor.usage ?? GPUBufferUsage.COPY_DST);
     return makeHandle(id, { destroy: () => __hyperthreeWebGpuDestroyBuffer(id) });
   };
   const makeTexture = (descriptor = {}) => {
     const size = descriptor.size || {};
-    const width = typeof size === 'number' ? size : (size.width ?? 1);
-    const height = typeof size === 'number' ? 1 : (size.height ?? 1);
-    const id = __hyperthreeWebGpuCreateTexture(width, height, descriptor.format ?? 'rgba8unorm', descriptor.usage ?? 4);
-    return makeHandle(id, { createView: (viewDescriptor = {}) => makeHandle(id, { __textureView: true, descriptor: viewDescriptor }) });
+    const width = typeof size === 'number' ? size : (Array.isArray(size) ? (size[0] ?? 1) : (size.width ?? 1));
+    const height = typeof size === 'number' ? 1 : (Array.isArray(size) ? (size[1] ?? 1) : (size.height ?? 1));
+    const id = __hyperthreeWebGpuCreateTexture(width, height, descriptor.format ?? 'rgba8unorm', descriptor.usage ?? GPUTextureUsage.TEXTURE_BINDING);
+    return makeHandle(id, {
+      createView: () => makeHandle(__hyperthreeWebGpuCreateTextureView(id), { __textureView: true }),
+      destroy: () => {},
+    });
   };
+  const normalizeBindGroupEntry = entry => {
+    const resource = entry.resource;
+    let normalizedResource;
+    if (resource?.__textureView) normalizedResource = { kind: 'textureView', view: handleId(resource) };
+    else if (resource?.__sampler) normalizedResource = { kind: 'sampler', sampler: handleId(resource) };
+    else if (resource?.buffer) normalizedResource = {
+      kind: 'buffer', buffer: handleId(resource.buffer), offset: resource.offset ?? 0, size: resource.size ?? 0,
+    };
+    else throw new TypeError('unsupported GPUBindGroup resource');
+    return { binding: entry.binding, resource: normalizedResource };
+  };
+  const normalizePipelineDescriptor = descriptor => ({
+    layout: descriptor.layout === 'auto' || descriptor.layout == null ? null : handleId(descriptor.layout),
+    vertex: {
+      module: handleId(descriptor.vertex?.module),
+      entryPoint: descriptor.vertex?.entryPoint ?? 'main',
+      buffers: (descriptor.vertex?.buffers ?? []).map(buffer => ({
+        arrayStride: buffer.arrayStride ?? 0,
+        stepMode: buffer.stepMode ?? 'vertex',
+        attributes: (buffer.attributes ?? []).map(attribute => ({
+          format: attribute.format,
+          offset: attribute.offset ?? 0,
+          shaderLocation: attribute.shaderLocation,
+        })),
+      })),
+    },
+    fragment: descriptor.fragment ? {
+      module: handleId(descriptor.fragment.module),
+      entryPoint: descriptor.fragment.entryPoint ?? 'main',
+      targets: (descriptor.fragment.targets ?? []).map(target => target == null ? null : ({
+        format: target.format,
+        blend: target.blend,
+        writeMask: target.writeMask ?? 15,
+      })),
+    } : null,
+    primitive: descriptor.primitive,
+    depthStencil: descriptor.depthStencil,
+  });
+  const normalizeRenderPassDescriptor = descriptor => ({
+    colorAttachments: (descriptor.colorAttachments ?? []).map(attachment => attachment == null ? null : ({
+      view: handleId(attachment.view),
+      resolveTarget: attachment.resolveTarget ? handleId(attachment.resolveTarget) : null,
+      loadOp: attachment.loadOp ?? 'load',
+      storeOp: attachment.storeOp ?? 'store',
+      clearValue: attachment.clearValue ?? { r: 0, g: 0, b: 0, a: 0 },
+    })),
+    depthStencilAttachment: descriptor.depthStencilAttachment ? {
+      view: handleId(descriptor.depthStencilAttachment.view),
+      depthLoadOp: descriptor.depthStencilAttachment.depthLoadOp ?? 'load',
+      depthStoreOp: descriptor.depthStencilAttachment.depthStoreOp ?? 'store',
+      depthClearValue: descriptor.depthStencilAttachment.depthClearValue ?? 1,
+    } : null,
+  });
   const makeDevice = () => {
     const queue = {
       writeBuffer(buffer, offset, data) {
@@ -440,7 +2198,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         const bytes = new Uint8Array(data.buffer, data.byteOffset ?? 0, data.byteLength ?? data.length);
         __hyperthreeWebGpuWriteTexture(destination.texture.__hyperthreeHandle, size.width, size.height, bytes);
       },
-      submit(commandBuffers) { __hyperthreeWebGpuSubmit(commandBuffers?.length ?? 0); },
+      submit(commandBuffers) { __hyperthreeWebGpuSubmit(JSON.stringify((commandBuffers ?? []).map(handleId))); },
     };
     const device = {
       queue,
@@ -451,32 +2209,80 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       createShaderModule(descriptor = {}) {
         return makeHandle(__hyperthreeWebGpuCreateShaderModule(descriptor.code ?? ''));
       },
-      createBindGroupLayout: (descriptor = {}) => makeHandle({ descriptor }),
-      createPipelineLayout: (descriptor = {}) => makeHandle({ descriptor }),
-      createBindGroup: (descriptor = {}) => makeHandle({ descriptor }),
-      createSampler: (descriptor = {}) => makeHandle({ descriptor }),
-      createRenderPipeline: (descriptor = {}) => makeHandle({ descriptor, getBindGroupLayout: () => makeHandle({}) }),
+      createBindGroupLayout(descriptor = {}) {
+        return makeHandle(__hyperthreeWebGpuCreateBindGroupLayout(descriptorJson(descriptor)));
+      },
+      createPipelineLayout(descriptor = {}) {
+        const normalized = { bindGroupLayouts: (descriptor.bindGroupLayouts ?? []).map(handleId) };
+        return makeHandle(__hyperthreeWebGpuCreatePipelineLayout(descriptorJson(normalized)));
+      },
+      createBindGroup(descriptor = {}) {
+        const normalized = {
+          layout: handleId(descriptor.layout),
+          entries: (descriptor.entries ?? []).map(normalizeBindGroupEntry),
+        };
+        return makeHandle(__hyperthreeWebGpuCreateBindGroup(descriptorJson(normalized)));
+      },
+      createSampler(descriptor = {}) {
+        return makeHandle(__hyperthreeWebGpuCreateSampler(descriptorJson(descriptor)), { __sampler: true });
+      },
+      createRenderPipeline(descriptor = {}) {
+        const id = __hyperthreeWebGpuCreateRenderPipeline(descriptorJson(normalizePipelineDescriptor(descriptor)));
+        return makeHandle(id, { getBindGroupLayout: () => makeHandle(0) });
+      },
       createRenderPipelineAsync: async (descriptor = {}) => device.createRenderPipeline(descriptor),
-      createComputePipeline: (descriptor = {}) => makeHandle({ descriptor }),
+      createComputePipeline(descriptor = {}) {
+        const normalized = {
+          layout: descriptor.layout === 'auto' || descriptor.layout == null ? null : handleId(descriptor.layout),
+          compute: {
+            module: handleId(descriptor.compute?.module),
+            entryPoint: descriptor.compute?.entryPoint ?? 'main',
+          },
+        };
+        return makeHandle(__hyperthreeWebGpuCreateComputePipeline(descriptorJson(normalized)));
+      },
       createComputePipelineAsync: async (descriptor = {}) => device.createComputePipeline(descriptor),
-      createCommandEncoder: () => ({
-        beginRenderPass: () => makePass(),
-        beginComputePass: () => makePass(),
-        copyBufferToBuffer() {},
-        copyTextureToTexture() {},
-        finish: () => ({}),
-      }),
+      createCommandEncoder() {
+        const encoderId = __hyperthreeWebGpuCreateCommandEncoder();
+        return makeHandle(encoderId, {
+          beginRenderPass(descriptor = {}) {
+            const passId = __hyperthreeWebGpuBeginRenderPass(encoderId, descriptorJson(normalizeRenderPassDescriptor(descriptor)));
+            return makePass(passId);
+          },
+          beginComputePass() {
+            return makePass(__hyperthreeWebGpuBeginComputePass(encoderId));
+          },
+          copyBufferToBuffer() {},
+          copyTextureToTexture() {},
+          finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },
+        });
+      },
       pushErrorScope() {}, popErrorScope: async () => null,
       lost: Promise.resolve({ reason: '', message: '' }),
     };
     return device;
   };
-  const makePass = () => ({
-    setPipeline() {}, setBindGroup() {}, setVertexBuffer() {}, setIndexBuffer() {},
-    setViewport() {}, setScissorRect() {}, setBlendConstant() {}, setStencilReference() {},
-    draw() {}, drawIndexed() {}, drawIndirect() {}, drawIndexedIndirect() {},
-    dispatchWorkgroups() {}, dispatchWorkgroupsIndirect() {}, end() {}, endPass() {},
-  });
+  const makePass = passId => {
+    const command = (operation, args) => __hyperthreeWebGpuPassCommand(passId, operation, JSON.stringify(args));
+    return {
+      setPipeline(pipeline) { command('setPipeline', [handleId(pipeline)]); },
+      setBindGroup(index, bindGroup, dynamicOffsets = []) { command('setBindGroup', [index, handleId(bindGroup), dynamicOffsets]); },
+      setVertexBuffer(slot, buffer, offset = 0, size) { command('setVertexBuffer', [slot, handleId(buffer), offset, size ?? null]); },
+      setIndexBuffer(buffer, format, offset = 0) { command('setIndexBuffer', [handleId(buffer), offset, format]); },
+      setViewport(x, y, width, height, minDepth, maxDepth) { command('setViewport', [x, y, width, height, minDepth, maxDepth]); },
+      setScissorRect(x, y, width, height) { command('setScissorRect', [x, y, width, height]); },
+      setBlendConstant(value) { command('setBlendConstant', [value.r, value.g, value.b, value.a]); },
+      setStencilReference(value) { command('setStencilReference', [value]); },
+      draw(vertexCount, instanceCount = 1, firstVertex = 0, firstInstance = 0) { command('draw', [vertexCount, instanceCount, firstVertex, firstInstance]); },
+      drawIndexed(indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) { command('drawIndexed', [indexCount, instanceCount, firstIndex, baseVertex, firstInstance]); },
+      drawIndirect(buffer, offset = 0) { command('drawIndirect', [handleId(buffer), offset]); },
+      drawIndexedIndirect(buffer, offset = 0) { command('drawIndexedIndirect', [handleId(buffer), offset]); },
+      dispatchWorkgroups(x, y = 1, z = 1) { command('dispatchWorkgroups', [x, y, z]); },
+      dispatchWorkgroupsIndirect(buffer, offset = 0) { command('dispatchWorkgroupsIndirect', [handleId(buffer), offset]); },
+      end() { __hyperthreeWebGpuEndPass(passId); },
+      endPass() { __hyperthreeWebGpuEndPass(passId); },
+    };
+  };
   const adapter = {
     name: 'HyperThree Native wgpu',
     features: new Set(),
