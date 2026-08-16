@@ -22,6 +22,10 @@ Three.js' `WebGPURenderer`: `configure()` validates the requested format and
 alpha mode against the native surface, `getCurrentTexture()` is rejected until
 configuration exists, and `unconfigure()` releases only swapchain textures and
 their views. Lost/Outdated acquisition retries native surface configuration.
+Projects can set `window.transparent = true` in `hyperthree.toml`; the host then
+creates a transparent native window when the platform supports it, chooses a
+premultiplied surface mode when available, and exposes the effective mode through
+`GPUCanvasContext.getConfiguration()`.
 On surfaces that expose opaque composition only, a premultiplied request is
 accepted as an opaque presentation fallback; transparent canvas composition is
 therefore not yet pixel-equivalent on those platforms.

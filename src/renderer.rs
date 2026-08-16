@@ -172,7 +172,11 @@ struct GpuTexture {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, render_state: SharedRenderState) -> Result<Self> {
+    pub async fn new(
+        window: Arc<Window>,
+        render_state: SharedRenderState,
+        transparent: bool,
+    ) -> Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -226,13 +230,28 @@ impl Renderer {
             .copied()
             .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(capabilities.formats[0]);
+        let alpha_mode = if transparent {
+            capabilities
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
+                .unwrap_or(capabilities.alpha_modes[0])
+        } else {
+            capabilities
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+                .unwrap_or(capabilities.alpha_modes[0])
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: capabilities.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

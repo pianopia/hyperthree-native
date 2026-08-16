@@ -108,6 +108,7 @@ globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfVideoFrameSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
+globalThis.__gltfCanvasAlphaSmoke = false;
 globalThis.__gltfResizeEvent = false;
 globalThis.__gltfSmokeReady = false;
 let smokeFrames = 0;
@@ -563,6 +564,13 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const canvasUnconfigured = canvasContext.configuration === null;
   canvasContext.configure(canvasConfiguration);
   globalThis.__gltfCanvasLifecycleSmoke = canvasUnconfigured && canvasContext.configuration === canvasConfiguration;
+  const premultipliedConfiguration = { ...canvasConfiguration, alphaMode: 'premultiplied' };
+  canvasContext.configure(premultipliedConfiguration);
+  const effectiveCanvasConfiguration = canvasContext.getConfiguration();
+  globalThis.__gltfCanvasAlphaSmoke = effectiveCanvasConfiguration.alphaMode === 'premultiplied' ||
+    effectiveCanvasConfiguration.alphaMode === 'opaque';
+  canvasContext.unconfigure();
+  canvasContext.configure(canvasConfiguration);
   globalThis.__gltfFeatureSmoke = instanced.isInstancedMesh && line.isLine && sprite.isSprite;
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
@@ -578,7 +586,8 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfExternalTextureSmoke ||
       !globalThis.__gltfVideoFrameSmoke ||
-      !globalThis.__gltfCanvasLifecycleSmoke) {
+      !globalThis.__gltfCanvasLifecycleSmoke ||
+      !globalThis.__gltfCanvasAlphaSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }
 }).catch((error) => {

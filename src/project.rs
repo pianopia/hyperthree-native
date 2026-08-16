@@ -29,6 +29,8 @@ pub struct Window {
     pub title: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    #[serde(default)]
+    pub transparent: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -122,6 +124,7 @@ output = "dist/game.js"
 title = "My HyperThree Game"
 width = 1280
 height = 720
+transparent = false
 
 [build]
 command = "npm run build"
@@ -209,3 +212,35 @@ const INIT_README: &str = r#"# My HyperThree Game
 native host. Keep browser-only DOM/WebGL calls out of the native entry until
 the corresponding native bridge is enabled.
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::Manifest;
+
+    #[test]
+    fn window_transparency_defaults_to_opaque() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+                [project]
+                name = "test"
+            "#,
+        )
+        .expect("minimal manifest should parse");
+        assert!(!manifest.window.transparent);
+    }
+
+    #[test]
+    fn window_transparency_is_read_from_manifest() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+                [project]
+                name = "test"
+
+                [window]
+                transparent = true
+            "#,
+        )
+        .expect("transparent manifest should parse");
+        assert!(manifest.window.transparent);
+    }
+}

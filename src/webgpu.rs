@@ -469,6 +469,23 @@ impl NativeWebGpuContext {
         Ok(())
     }
 
+    fn canvas_configuration(&self) -> Result<Value, String> {
+        let config = self
+            .surface_config
+            .lock()
+            .map_err(|_| "WebGPU surface configuration poisoned".to_string())?;
+        let alpha_mode = if config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied {
+            "premultiplied"
+        } else {
+            "opaque"
+        };
+        Ok(serde_json::json!({
+            "alphaMode": alpha_mode,
+            "width": config.width,
+            "height": config.height,
+        }))
+    }
+
     fn configure_surface(&self, descriptor: &Value) -> Result<(), String> {
         let mut config = self
             .surface_config
@@ -2404,6 +2421,22 @@ pub fn register_bindings(
         },
     )?;
 
+    let canvas_configuration_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuGetCanvasConfiguration",
+        0,
+        move |_this, _args, _context| {
+            canvas_configuration_gpu
+                .canvas_configuration()
+                .and_then(|configuration| {
+                    serde_json::to_string(&configuration).map_err(|error| error.to_string())
+                })
+                .map(|configuration| JsValue::from(js_string!(configuration)))
+                .map_err(native_error)
+        },
+    )?;
+
     let unconfigure_canvas_gpu = gpu.clone();
     register(
         context,
@@ -4331,6 +4364,10 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       canvasContext.configuration = configuration;
     },
     unconfigure() { __hyperthreeWebGpuUnconfigureCanvas(); canvasContext.configuration = null; },
+    getConfiguration() {
+      const nativeConfiguration = JSON.parse(__hyperthreeWebGpuGetCanvasConfiguration());
+      return Object.assign({}, canvasContext.configuration || {}, nativeConfiguration);
+    },
     getCurrentTexture: makeSurfaceTexture,
   };
   const nativeCanvas = {

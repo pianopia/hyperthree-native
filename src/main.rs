@@ -104,6 +104,7 @@ struct GameHost {
     asset_root: PathBuf,
     render_state: bridge::SharedRenderState,
     input_state: bridge::SharedInputState,
+    transparent: bool,
     restart_count: u32,
     modifiers: ModifiersState,
 }
@@ -115,9 +116,11 @@ impl GameHost {
         asset_root: &Path,
         render_state: bridge::SharedRenderState,
         input_state: bridge::SharedInputState,
+        transparent: bool,
         restart_count: u32,
     ) -> Result<(Renderer, JsRuntime)> {
-        let renderer = pollster::block_on(Renderer::new(window, render_state.clone()))?;
+        let renderer =
+            pollster::block_on(Renderer::new(window, render_state.clone(), transparent))?;
         let mut runtime = JsRuntime::new_with_gpu(
             render_state,
             input_state,
@@ -142,6 +145,7 @@ impl GameHost {
         asset_root: PathBuf,
         render_state: bridge::SharedRenderState,
         input_state: bridge::SharedInputState,
+        transparent: bool,
     ) -> Result<Self> {
         let (renderer, runtime) = Self::start_session(
             window,
@@ -149,6 +153,7 @@ impl GameHost {
             &asset_root,
             render_state.clone(),
             input_state.clone(),
+            transparent,
             0,
         )?;
         Ok(Self {
@@ -158,6 +163,7 @@ impl GameHost {
             asset_root,
             render_state,
             input_state,
+            transparent,
             restart_count: 0,
             modifiers: ModifiersState::default(),
         })
@@ -196,6 +202,7 @@ impl GameHost {
             &self.asset_root,
             self.render_state.clone(),
             self.input_state.clone(),
+            self.transparent,
             self.restart_count,
         )?;
         self.renderer = Some(renderer);
@@ -232,6 +239,12 @@ fn run_native(
                     .and_then(|manifest| manifest.window.height)
                     .unwrap_or(720),
             ))
+            .with_transparent(
+                manifest
+                    .as_ref()
+                    .map(|manifest| manifest.window.transparent)
+                    .unwrap_or(false),
+            )
             .build(&event_loop)
             .context("failed to create native window")?,
     );
@@ -241,6 +254,10 @@ fn run_native(
         asset_root,
         render_state.clone(),
         input_state.clone(),
+        manifest
+            .as_ref()
+            .map(|manifest| manifest.window.transparent)
+            .unwrap_or(false),
     )?;
     let snapshot = render_state
         .lock()

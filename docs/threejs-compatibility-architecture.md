@@ -127,7 +127,10 @@ setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、�
 `GPUCanvasContext.configure()`/`unconfigure()`、canvas surface textureの
 寿命管理、Lost/Outdated時のnative再configureも標準Renderer経路へ接続した。ネイティブsurfaceが
 opaque合成しか公開しない場合は、Three.jsのpremultiplied要求をopaqueへフォールバックする。
-この場合の透明canvas合成はまだブラウザとピクセル同値ではない。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
+`hyperthree.toml`の`window.transparent = true`はwinitの透明window生成とsurfaceの
+premultiplied選択へ伝播し、`GPUCanvasContext.getConfiguration()`で実効alpha modeを返す。
+この場合でも、opaque surfaceしか公開しないplatformでは透明canvas合成はまだブラウザと
+ピクセル同値ではない。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
 Promiseへ配送し、error scopeはnative `push_error_scope`/`pop_error_scope`へ接続した。
 ホストは同じloss recordをフレーム境界で検出し、無効化されたGPUへ追加submitせず安全に
 停止する。`tests/device-loss-restart-smoke.js`では同じWindow上でnative device、Renderer、
