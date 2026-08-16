@@ -2329,12 +2329,67 @@ impl JsRuntime {
                 globalThis.DOMException = globalThis.DOMException || class DOMException extends Error {
                   constructor(message = '', name = 'Error') { super(message); this.name = name; }
                 };
-                globalThis.createImageBitmap = globalThis.createImageBitmap || (async (source) => {
-                  const decoded = __hyperthreeDecodeImage(source);
+                globalThis.createImageBitmap = globalThis.createImageBitmap || (async (source, ...args) => {
+                  let cropX = 0;
+                  let cropY = 0;
+                  let cropWidth;
+                  let cropHeight;
+                  let options = {};
+                  if (args.length > 0 && typeof args[0] === 'object') {
+                    options = args[0] || {};
+                  } else {
+                    cropX = Number(args[0] || 0);
+                    cropY = Number(args[1] || 0);
+                    cropWidth = Number(args[2]);
+                    cropHeight = Number(args[3]);
+                    options = args[4] || {};
+                  }
+                  let sourceWidth;
+                  let sourceHeight;
+                  let sourceData;
+                  if (source && source.data !== undefined && Number.isInteger(source.width) && Number.isInteger(source.height)) {
+                    sourceWidth = source.width;
+                    sourceHeight = source.height;
+                    sourceData = new Uint8Array(source.data);
+                  } else {
+                    const blob = source instanceof Blob ? source : new Blob([source]);
+                    const decoded = __hyperthreeDecodeImage(blob);
+                    sourceWidth = decoded.width;
+                    sourceHeight = decoded.height;
+                    sourceData = new Uint8Array(decoded.data);
+                  }
+                  cropWidth = cropWidth === undefined ? sourceWidth - cropX : cropWidth;
+                  cropHeight = cropHeight === undefined ? sourceHeight - cropY : cropHeight;
+                  if (![cropX, cropY, cropWidth, cropHeight].every(Number.isInteger) || cropWidth <= 0 || cropHeight <= 0 || cropX < 0 || cropY < 0 || cropX + cropWidth > sourceWidth || cropY + cropHeight > sourceHeight) {
+                    throw new RangeError('createImageBitmap crop rectangle is outside the source image');
+                  }
+                  const width = Number.isInteger(options.resizeWidth) ? options.resizeWidth : cropWidth;
+                  const height = Number.isInteger(options.resizeHeight) ? options.resizeHeight : cropHeight;
+                  if (width <= 0 || height <= 0) throw new RangeError('createImageBitmap resize dimensions must be positive');
+                  const data = new Uint8Array(width * height * 4);
+                  const flipY = options.imageOrientation === 'flipY';
+                  for (let y = 0; y < height; y += 1) {
+                    const sourceY = cropY + (flipY ? cropHeight - 1 - Math.floor(y * cropHeight / height) : Math.floor(y * cropHeight / height));
+                    for (let x = 0; x < width; x += 1) {
+                      const sourceX = cropX + Math.floor(x * cropWidth / width);
+                      const sourceOffset = (sourceY * sourceWidth + sourceX) * 4;
+                      const targetOffset = (y * width + x) * 4;
+                      const alpha = sourceData[sourceOffset + 3];
+                      data[targetOffset] = sourceData[sourceOffset];
+                      data[targetOffset + 1] = sourceData[sourceOffset + 1];
+                      data[targetOffset + 2] = sourceData[sourceOffset + 2];
+                      data[targetOffset + 3] = alpha;
+                      if (options.premultiplyAlpha === 'premultiply') {
+                        data[targetOffset] = Math.round(data[targetOffset] * alpha / 255);
+                        data[targetOffset + 1] = Math.round(data[targetOffset + 1] * alpha / 255);
+                        data[targetOffset + 2] = Math.round(data[targetOffset + 2] * alpha / 255);
+                      }
+                    }
+                  }
                   const bitmap = {
-                    width: decoded.width,
-                    height: decoded.height,
-                    data: new Uint8Array(decoded.data),
+                    width,
+                    height,
+                    data,
                     close() { this.data = new Uint8Array(0); },
                   };
                   Object.setPrototypeOf(bitmap, ImageBitmap.prototype);
@@ -4643,9 +4698,9 @@ mod tests {
                   .then((result) => { globalThis.__dataFetchProbe = result; });
                 fetch("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
                   .then((response) => response.blob())
-                  .then((blob) => createImageBitmap(blob))
+                  .then((blob) => createImageBitmap(blob, { resizeWidth: 2, resizeHeight: 2 }))
                   .then((bitmap) => {
-                    globalThis.__imageProbe = bitmap.width === 1 && bitmap.height === 1 && bitmap.data.byteLength === 4;
+                    globalThis.__imageProbe = bitmap.width === 2 && bitmap.height === 2 && bitmap.data.byteLength === 16;
                   });
                 "#,
             )
