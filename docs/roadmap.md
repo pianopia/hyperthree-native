@@ -58,6 +58,7 @@
 - [x] createImageBitmap crop/resize, flipY, premultiplied-alpha, and ImageBitmap-source compatibility
 - [x] ImageData RGBA source compatibility for createImageBitmap
 - [x] Native HTMLImageElement/TextureLoader RGBA loading and WebGPU upload fixture
+- [x] CubeTextureLoader six-face image loading, native layered upload, and cube background fixture
 - [x] Native external RGBA frame import fallback, `externalTexture` bind-group compatibility, WGSL sampling normalization, and GPU readback fixture
 - [x] WebCodecs-compatible RGBA `VideoFrame` shape (`clone`, `copyTo`, `close`) and Three.js `VideoFrameTexture.setFrame()` fixture
 - [x] RGBA-backed `HTMLVideoElement` compatibility boundary with `play/pause`, `readyState`, and `requestVideoFrameCallback()` fixture

@@ -81,7 +81,8 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 `Blob`、`ArrayBuffer`、`TextDecoder`、`createImageBitmap`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
 用意した。`navigator.userAgent`、`console`、data URL、JPEG/PNG/WebP/GIF/BMP/HDR/EXR/TIFF decode、
 `ImageData`入力と`createImageBitmap()`のcrop/resize/flipY/premultiplyオプション、
-native `HTMLImageElement`/`TextureLoader`の`onload`/`decode`とRGBA GPU upload、
+native `HTMLImageElement`/`TextureLoader`の`onload`/`decode`、`CubeTextureLoader`の6面画像と
+キューブ環境のRGBA GPU upload、
 `GPUQueue.copyExternalImageToTexture`、GPUBuffer readbackも含め、Three.js 0.179の
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
 AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
