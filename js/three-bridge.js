@@ -16,6 +16,9 @@ globalThis.HyperThreeNative = {
   beginFrame() {
     __hyperthreeBeginFrame();
   },
+  pushParticle(x, y, z, size, r, g, b, a = 1, emissiveR = 1, emissiveG = 1, emissiveB = 1) {
+    __hyperthreePushParticle(x, y, z, size, r, g, b, a, emissiveR, emissiveG, emissiveB);
+  },
   pushCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
     __hyperthreePushCube(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
   },
@@ -169,6 +172,46 @@ globalThis.HyperThreeNative = {
             { r: lightColor.r ?? 1, g: lightColor.g ?? 1, b: lightColor.b ?? 1 },
             object.intensity ?? 2.5,
           );
+          return;
+        }
+        if (object.isPoints) {
+          const positionAttribute = object.geometry?.attributes?.position;
+          if (!positionAttribute?.array) {
+            skippedObjects += 1;
+            return;
+          }
+          const elements = object.matrixWorld?.elements;
+          const material = Array.isArray(object.material)
+            ? object.material[0]
+            : object.material;
+          const color = material?.color || { r: 1, g: 1, b: 1 };
+          const alpha = material?.opacity ?? 1;
+          const size = material?.size ?? 0.08;
+          const intensity = material?.userData?.hyperthreeEmissiveIntensity ?? 1;
+          for (let index = 0; index + 2 < positionAttribute.array.length && renderedObjects < maxObjects; index += 3) {
+            const x = positionAttribute.array[index];
+            const y = positionAttribute.array[index + 1];
+            const z = positionAttribute.array[index + 2];
+            const world = elements
+              ? [
+                elements[0] * x + elements[4] * y + elements[8] * z + elements[12],
+                elements[1] * x + elements[5] * y + elements[9] * z + elements[13],
+                elements[2] * x + elements[6] * y + elements[10] * z + elements[14],
+              ]
+              : [
+                x + (object.position?.x ?? 0),
+                y + (object.position?.y ?? 0),
+                z + (object.position?.z ?? 0),
+              ];
+            HyperThreeNative.pushParticle(
+              world[0], world[1], world[2], size,
+              color.r ?? 1, color.g ?? 1, color.b ?? 1, alpha,
+              (color.r ?? 1) * intensity,
+              (color.g ?? 1) * intensity,
+              (color.b ?? 1) * intensity,
+            );
+            renderedObjects += 1;
+          }
           return;
         }
         if (renderedObjects >= maxObjects || !object.isMesh) {

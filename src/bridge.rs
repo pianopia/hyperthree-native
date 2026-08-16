@@ -77,6 +77,14 @@ pub struct CustomMeshSnapshot {
     pub model_matrix: Option<[[f64; 4]; 4]>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ParticleSnapshot {
+    pub position: [f64; 3],
+    pub size: f64,
+    pub color: [f64; 4],
+    pub emissive: [f64; 3],
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeometryData {
     pub positions: Vec<[f32; 3]>,
@@ -258,6 +266,7 @@ pub struct NativeRenderSnapshot {
     pub clear_color: [f64; 4],
     pub cubes: Vec<CubeSnapshot>,
     pub custom_meshes: Vec<CustomMeshSnapshot>,
+    pub particles: Vec<ParticleSnapshot>,
     pub camera: CameraSnapshot,
     pub geometry_registry: SharedGeometryRegistry,
     pub texture_registry: SharedTextureRegistry,
@@ -269,6 +278,7 @@ pub struct NativeRenderState {
     clear_color: [f64; 4],
     cubes: Vec<CubeSnapshot>,
     custom_meshes: Vec<CustomMeshSnapshot>,
+    particles: Vec<ParticleSnapshot>,
     camera: CameraSnapshot,
     geometry_registry: SharedGeometryRegistry,
     texture_registry: SharedTextureRegistry,
@@ -344,6 +354,7 @@ impl Default for NativeRenderState {
                 model_matrix: None,
             }],
             custom_meshes: Vec::new(),
+            particles: Vec::new(),
             camera: CameraSnapshot {
                 position: [0.0, 0.0, 4.0],
                 target: [0.0, 0.0, 0.0],
@@ -369,6 +380,7 @@ impl NativeRenderState {
             clear_color: self.clear_color,
             cubes: self.cubes.clone(),
             custom_meshes: self.custom_meshes.clone(),
+            particles: self.particles.clone(),
             camera: self.camera,
             geometry_registry: self.geometry_registry.clone(),
             texture_registry: self.texture_registry.clone(),
@@ -472,6 +484,22 @@ impl NativeRenderState {
     pub fn begin_frame(&mut self) {
         self.cubes.clear();
         self.custom_meshes.clear();
+        self.particles.clear();
+    }
+
+    pub fn push_particle(
+        &mut self,
+        position: [f64; 3],
+        size: f64,
+        color: [f64; 4],
+        emissive: [f64; 3],
+    ) {
+        self.particles.push(ParticleSnapshot {
+            position,
+            size: size.max(0.001),
+            color: color.map(|component| component.clamp(0.0, 1.0)),
+            emissive: emissive.map(|component| component.max(0.0)),
+        });
     }
 
     pub fn push_primitive_matrix_with_material(

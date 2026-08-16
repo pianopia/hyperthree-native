@@ -125,6 +125,36 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register frame binding: {error}"))?;
 
+        let particle_state = render_state.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreePushParticle"), 11, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let position = [
+                        number_arg(args, 0, context)?,
+                        number_arg(args, 1, context)?,
+                        number_arg(args, 2, context)?,
+                    ];
+                    let size = number_arg(args, 3, context)?;
+                    let color = [
+                        number_arg(args, 4, context)?,
+                        number_arg(args, 5, context)?,
+                        number_arg(args, 6, context)?,
+                        number_arg(args, 7, context)?,
+                    ];
+                    let emissive = [
+                        number_arg(args, 8, context)?,
+                        number_arg(args, 9, context)?,
+                        number_arg(args, 10, context)?,
+                    ];
+                    particle_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("render state poisoned"))?
+                        .push_particle(position, size, color, emissive);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register particle binding: {error}"))?;
+
         let instance_state = render_state.clone();
         context
             .register_global_builtin_callable(js_string!("__hyperthreePushCube"), 12, unsafe {
@@ -1460,6 +1490,101 @@ mod tests {
         let geometry = registry.get(42).unwrap();
         assert_eq!(geometry.positions.len(), 3);
         assert_eq!(geometry.indices, [0, 1, 2]);
+    }
+
+    #[test]
+    fn three_scene_sync_converts_points_to_native_particles() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                const scene = {
+                  updateMatrixWorld() {},
+                  traverse(callback) {
+                    callback({
+                      visible: true,
+                      isPoints: true,
+                      position: { x: 2, y: 0, z: 0 },
+                      geometry: {
+                        attributes: {
+                          position: { array: new Float32Array([0, 0, 0, 1, 0, 0]) },
+                        },
+                      },
+                      material: {
+                        size: 0.25,
+                        color: { r: 1, g: 0.2, b: 0.1 },
+                        opacity: 0.75,
+                      },
+                    });
+                  },
+                };
+                globalThis.HyperThreeGame = {
+                  update() { HyperThreeNative.syncThreeScene(scene); },
+                };
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.particles.len(), 2);
+        assert_eq!(snapshot.particles[0].position, [2.0, 0.0, 0.0]);
+        assert_eq!(snapshot.particles[1].position, [3.0, 0.0, 0.0]);
+        assert_eq!(snapshot.particles[0].size, 0.25);
+    }
+
+    #[test]
+    fn animated_matrix_world_is_forwarded_each_frame() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                const object = {
+                  visible: true,
+                  isMesh: true,
+                  geometry: { type: "BoxGeometry" },
+                  position: { x: 0, y: 0, z: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                  rotation: { y: 0 },
+                  matrixWorld: { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] },
+                  material: { color: { r: 1, g: 1, b: 1 }, opacity: 1 },
+                };
+                const scene = {
+                  updateMatrixWorld() {},
+                  traverse(callback) { callback(object); },
+                };
+                let x = 0;
+                globalThis.HyperThreeGame = {
+                  update() {
+                    x += 1;
+                    object.matrixWorld.elements[12] = x;
+                    HyperThreeNative.syncThreeScene(scene);
+                  },
+                };
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        assert_eq!(
+            render_state.lock().unwrap().snapshot().cubes[0].position,
+            [1.0, 0.0, 0.0]
+        );
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        assert_eq!(
+            render_state.lock().unwrap().snapshot().cubes[0].position,
+            [2.0, 0.0, 0.0]
+        );
     }
 
     #[test]

@@ -44,8 +44,9 @@ render/compute passを同じ意味で提供する必要がある。
 - Transform: Three.js `matrixWorld` を優先し、アニメーションで変化する行列を保持
 - Light: DirectionalLightの方向、色、強度、ambient
 - Asset: glTF/GLBの法線、UV、PBR係数、ベースカラーテクスチャ
+- Effects: Three.js `Points` をネイティブのカメラ向きビルボード粒子へ変換
 
-これらはネイティブの直接光PBRパスまで接続済みである。従来の位置・色だけの
+これらはネイティブの直接光PBRパスと粒子パスまで接続済みである。従来の位置・色だけの
 簡略化から、アニメーション変換を失わない汎用描画契約へ移行する最初の縦切り
 になっている。
 
@@ -72,7 +73,7 @@ animation clipを、JSヒープを経由せずネイティブ側でストリー�
 
 ### Phase D: エフェクトとGPU-driven rendering
 
-TSL/NodeMaterialのshader graph、particle、instancing、post-processing、shadow、
+TSL/NodeMaterialのshader graph、custom particle、instancing、post-processing、shadow、
 environment lighting、compute culling、indirect drawを同じWebGPU契約で実行する。
 
 ## 互換性の判定基準

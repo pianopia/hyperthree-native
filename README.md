@@ -103,6 +103,7 @@ Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階
 [`docs/threejs-compatibility-architecture.md`](docs/threejs-compatibility-architecture.md)
 にまとめています。現在は移行第一段階として、法線、PBR係数、DirectionalLight、
 `matrixWorld`をネイティブ直接光PBRパスへ接続しています。
+`THREE.Points`もカメラ向きビルボード粒子としてネイティブ描画へ接続しています。
 
 入力は`isKeyDown()`、`isMouseButtonDown()`、`getMousePosition()`から取得でき、
 PerspectiveCameraとOrthographicCameraの両方を同期できます。

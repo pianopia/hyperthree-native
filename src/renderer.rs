@@ -132,6 +132,11 @@ struct CustomBatch {
     instance_count: usize,
 }
 
+struct ParticleBatch {
+    instance_offset: usize,
+    instance_count: usize,
+}
+
 pub struct Renderer {
     pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -589,6 +594,31 @@ impl Renderer {
         }
         drop(texture_registry);
         drop(registry);
+        let particle_offset = instances.len();
+        for particle in snapshot
+            .particles
+            .iter()
+            .take(MAX_INSTANCES.saturating_sub(particle_offset))
+        {
+            let model = billboard_model(&snapshot.camera, particle.position, particle.size);
+            instances.push(build_instance_from_model(
+                &snapshot.camera,
+                &model,
+                MaterialSnapshot {
+                    base_color: particle.color,
+                    metallic: 0.0,
+                    roughness: 1.0,
+                    emissive: particle.emissive,
+                    unlit: true,
+                    base_color_texture: None,
+                },
+                aspect,
+            ));
+        }
+        let particle_batch = ParticleBatch {
+            instance_offset: particle_offset,
+            instance_count: instances.len() - particle_offset,
+        };
         if !instances.is_empty() {
             self.queue
                 .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
@@ -681,6 +711,17 @@ impl Renderer {
                     0,
                     batch.instance_offset as u32
                         ..(batch.instance_offset + batch.instance_count) as u32,
+                );
+            }
+            if particle_batch.instance_count > 0 {
+                pass.set_bind_group(0, &self.instance_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.plane_vertex_buffer.slice(..));
+                pass.set_index_buffer(self.plane_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(
+                    0..PLANE_INDICES.len() as u32,
+                    0,
+                    particle_batch.instance_offset as u32
+                        ..(particle_batch.instance_offset + particle_batch.instance_count) as u32,
                 );
             }
         }
@@ -916,17 +957,6 @@ fn build_model_values(
     )
 }
 
-fn build_normal_matrix_values(scale_values: [f64; 3], rotation_y_value: f64) -> [[f32; 4]; 4] {
-    mat_mul(
-        &rotation_y(rotation_y_value as f32),
-        &scale(Vec3 {
-            x: 1.0 / scale_values[0] as f32,
-            y: 1.0 / scale_values[1] as f32,
-            z: 1.0 / scale_values[2] as f32,
-        }),
-    )
-}
-
 fn build_instance(
     camera: &CameraSnapshot,
     position: [f64; 3],
@@ -939,12 +969,19 @@ fn build_instance(
     let model = model_matrix
         .map(|matrix| matrix.map(|column| column.map(|value| value as f32)))
         .unwrap_or_else(|| build_model_values(position, scale, rotation_y));
+    build_instance_from_model(camera, &model, material, aspect)
+}
+
+fn build_instance_from_model(
+    camera: &CameraSnapshot,
+    model: &[[f32; 4]; 4],
+    material: MaterialSnapshot,
+    aspect: f32,
+) -> Instance {
     Instance {
-        mvp: build_mvp_from_model(camera, &model, aspect),
-        model,
-        normal_matrix: model_matrix
-            .map(|_| model)
-            .unwrap_or_else(|| build_normal_matrix_values(scale, rotation_y)),
+        mvp: build_mvp_from_model(camera, model, aspect),
+        model: *model,
+        normal_matrix: *model,
         base_color: material.base_color.map(|component| component as f32),
         material: [
             material.metallic as f32,
@@ -959,6 +996,33 @@ fn build_instance(
             0.0,
         ],
     }
+}
+
+fn billboard_model(camera: &CameraSnapshot, position: [f64; 3], size: f64) -> [[f32; 4]; 4] {
+    let eye = vec3(camera.position);
+    let target = vec3(camera.target);
+    let forward = normalize(sub(target, eye));
+    let right = normalize(cross(
+        forward,
+        Vec3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        },
+    ));
+    let up = cross(right, forward);
+    let size = size as f32;
+    [
+        [right.x * size, right.y * size, right.z * size, 0.0],
+        [up.x * size, up.y * size, up.z * size, 0.0],
+        [-forward.x * size, -forward.y * size, -forward.z * size, 0.0],
+        [
+            position[0] as f32,
+            position[1] as f32,
+            position[2] as f32,
+            1.0,
+        ],
+    ]
 }
 
 #[derive(Clone, Copy)]
