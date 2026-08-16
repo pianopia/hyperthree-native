@@ -4617,7 +4617,17 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       endOfPassWriteIndex: descriptor.timestampWrites.endOfPassWriteIndex,
     } : null,
   });
-  const makeDevice = () => {
+  const nativeFeatures = new Set([__HYPERTHREE_FEATURES__]);
+  const nativeLimits = __HYPERTHREE_LIMITS__;
+  const makeDevice = (descriptor = {}) => {
+    for (const feature of descriptor.requiredFeatures ?? []) {
+      if (!nativeFeatures.has(feature)) throw new TypeError(`required WebGPU feature is unavailable: ${feature}`);
+    }
+    for (const [name, requested] of Object.entries(descriptor.requiredLimits ?? {})) {
+      if (!(name in nativeLimits) || typeof requested !== 'number' || requested > nativeLimits[name]) {
+        throw new TypeError(`required WebGPU limit is unavailable: ${name}`);
+      }
+    }
     let resolveLost;
     const lost = new Promise(resolve => { resolveLost = resolve; });
     const pollLost = () => {
@@ -4689,8 +4699,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     };
     const device = {
       queue,
-      features: new Set([__HYPERTHREE_FEATURES__]),
-      limits: __HYPERTHREE_LIMITS__,
+      features: new Set(nativeFeatures),
+      limits: nativeLimits,
       createBuffer: makeBuffer,
       createTexture: makeTexture,
       importExternalTexture(descriptor = {}) {
@@ -4919,10 +4929,12 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   };
   const adapter = {
     name: 'HyperThree Native wgpu',
-    features: new Set([__HYPERTHREE_FEATURES__]),
-    limits: __HYPERTHREE_LIMITS__,
+    features: new Set(nativeFeatures),
+    limits: nativeLimits,
+    info: { vendor: 'HyperThree', architecture: 'wgpu', device: 'native', description: 'HyperThree Native wgpu adapter' },
     isFallbackAdapter: false,
-    requestDevice: async () => makeDevice(),
+    requestDevice: async (descriptor = {}) => makeDevice(descriptor),
+    requestAdapterInfo: async () => adapter.info,
   };
   globalThis.navigator = globalThis.navigator || {};
   globalThis.navigator.userAgent = globalThis.navigator.userAgent || 'HyperThreeNative/0.1';
@@ -4933,7 +4945,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   globalThis.window.innerWidth = globalThis.window.innerWidth || nativeCanvas.width;
   globalThis.window.innerHeight = globalThis.window.innerHeight || nativeCanvas.height;
   globalThis.navigator.gpu = {
-    requestAdapter: async () => adapter,
+    requestAdapter: async (_options = {}) => adapter,
     getPreferredCanvasFormat: () => 'bgra8unorm-srgb',
   };
 })();

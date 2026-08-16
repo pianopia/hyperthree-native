@@ -98,6 +98,9 @@ timestampをresolveしてMAP_READするfixtureも実行し、未提供backendで
 dataOffset/size、`writeTexture()`のdataLayout.offsetもnative wgpuコマンドへ接続した。
 Adapter/Deviceの実GPU limitsを`GPUSupportedLimits`互換のcamelCaseで公開し、
 `GPUQueue.onSubmittedWorkDone()`はwgpuの`Maintain::Wait`で実際のsubmit完了を待つ。
+`requestAdapter()`はadapter optionsを受け取り、`requestDevice()`はrequiredFeatures/requiredLimitsを
+実機の公開能力と照合してからdeviceを生成する。未提供能力を黙って有効化せず、adapter infoも
+標準形状で公開するため、Three.js側のfeature分岐がネイティブ実機の能力と一致する。
 storage bufferをComputePassで更新し、別のGPUBufferへcopyしてMAP_READするnative
 dispatch経路もfixtureで検証している。
 標準のr/rg/rgba integer・float、HDR packed、depth/stencil texture formatをwgpuへ
