@@ -96,9 +96,9 @@ shadow、equirectangular environment、MRT、indirect drawとそのGPU readback�
 スモーク済みである。`GPURenderBundleEncoder`の記録・finish・`executeBundles()`、
 `GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/
 `endOcclusionQuery()`、`resolveQuerySet()`とMAP_READ readbackもnative wgpuへ接続した。
-`timestamp-query`と`timestampWrites`がnative adapterで提供される場合は、inside-passの開始／終了
-timestampをresolveしてMAP_READするfixtureも実行し、未提供backendでは機能未提供として安全に
-スキップする。
+`timestamp-query`と`timestampWrites`がnative adapterで提供される場合は、RenderPass inside-passの
+開始／終了timestampに加え、`GPUCommandEncoder.writeTimestamp()`のpass外記録をresolveして
+MAP_READするfixtureも実行し、未提供backendでは機能未提供として安全にスキップする。
 `GPUCommandEncoder.clearBuffer()`、`copyBufferToTexture()`、`GPUQueue.writeBuffer()`の
 dataOffset/size、`writeTexture()`のdataLayout.offsetもnative wgpuコマンドへ接続した。
 Adapter/Deviceの実GPU limitsを`GPUSupportedLimits`互換のcamelCaseで公開し、

@@ -509,26 +509,31 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!device.features.has("timestamp-query")) {
     globalThis.__gltfTimestampSmoke = true;
   } else {
-    const timestampQuerySet = device.createQuerySet({ type: "timestamp", count: 2 });
-    const timestampResolve = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
-    const timestampReadback = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const timestampQuerySet = device.createQuerySet({ type: "timestamp", count: 4 });
+    const timestampResolve = device.createBuffer({ size: 32, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const timestampReadback = device.createBuffer({ size: 32, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const timestampEncoder = device.createCommandEncoder();
+    timestampEncoder.writeTimestamp(timestampQuerySet, 0);
     const timestampPass = timestampEncoder.beginRenderPass({ colorAttachments: [{
       view: indirectTarget.createView(),
       loadOp: "load",
       storeOp: "store",
     }], timestampWrites: {
       querySet: timestampQuerySet,
-      beginningOfPassWriteIndex: 0,
-      endOfPassWriteIndex: 1,
+      beginningOfPassWriteIndex: 1,
+      endOfPassWriteIndex: 2,
     } });
     timestampPass.end();
-    timestampEncoder.resolveQuerySet(timestampQuerySet, 0, 2, timestampResolve, 0);
-    timestampEncoder.copyBufferToBuffer(timestampResolve, 0, timestampReadback, 0, 16);
+    timestampEncoder.writeTimestamp(timestampQuerySet, 3);
+    timestampEncoder.resolveQuerySet(timestampQuerySet, 0, 4, timestampResolve, 0);
+    timestampEncoder.copyBufferToBuffer(timestampResolve, 0, timestampReadback, 0, 32);
     device.queue.submit([timestampEncoder.finish()]);
     await timestampReadback.mapAsync(GPUMapMode.READ);
     const timestampResult = new BigUint64Array(timestampReadback.getMappedRange());
-    globalThis.__gltfTimestampSmoke = timestampResult[0] > 0n && timestampResult[1] >= timestampResult[0];
+    globalThis.__gltfTimestampSmoke = timestampResult[0] > 0n &&
+      timestampResult[1] >= timestampResult[0] &&
+      timestampResult[2] >= timestampResult[1] &&
+      timestampResult[3] >= timestampResult[2];
     timestampReadback.unmap();
     timestampQuerySet.destroy();
     timestampResolve.destroy();

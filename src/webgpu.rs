@@ -147,6 +147,10 @@ enum RecordedCommand {
         destination: u64,
         destination_offset: u64,
     },
+    WriteTimestamp {
+        query_set: u64,
+        query_index: u32,
+    },
 }
 
 #[derive(Debug)]
@@ -1714,6 +1718,15 @@ impl NativeWebGpuContext {
                     destination_offset: value_u64_or(values, 4, 0)?,
                 }
             }
+            "writeTimestamp" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "writeTimestamp payload must be an array".to_string())?;
+                RecordedCommand::WriteTimestamp {
+                    query_set: value_u64(values, 0)?,
+                    query_index: value_u32(values, 1)?,
+                }
+            }
             _ => return Err(format!("unsupported WebGPU encoder command {operation}")),
         };
         let mut resources = self
@@ -2128,6 +2141,15 @@ impl NativeWebGpuContext {
                         destination,
                         destination_offset,
                     );
+                }
+                RecordedCommand::WriteTimestamp {
+                    query_set,
+                    query_index,
+                } => {
+                    let query_set = resources.query_sets.get(&query_set).ok_or_else(|| {
+                        format!("unknown timestamp GPUQuerySet handle {query_set}")
+                    })?;
+                    encoder.write_timestamp(query_set, query_index);
                 }
             }
         }
@@ -5077,6 +5099,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           resolveQuerySet(querySet, firstQuery, queryCount, destination, destinationOffset) {
             __hyperthreeWebGpuEncoderCommand(encoderId, 'resolveQuerySet', JSON.stringify([
               handleId(querySet), firstQuery, queryCount, handleId(destination), destinationOffset ?? 0,
+            ]));
+          },
+          writeTimestamp(querySet, queryIndex) {
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'writeTimestamp', JSON.stringify([
+              handleId(querySet), queryIndex,
             ]));
           },
           finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },

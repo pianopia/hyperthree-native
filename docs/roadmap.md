@@ -48,7 +48,7 @@
 - [x] Three.js WebGPURenderer PBR/effect render-target pixel readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
-- [x] WebGPU timestamp-query feature negotiation, inside-pass writes, resolve, and conditional native readback fixture
+- [x] WebGPU timestamp-query feature negotiation, pass/external writes, resolve, and conditional native readback fixture
 - [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
 - [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
 - [x] WebGPU device/adapter limits exposure and queue onSubmittedWorkDone synchronization
