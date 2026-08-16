@@ -411,6 +411,10 @@ impl AudioEngine {
         id
     }
 
+    pub fn destroy_analyser(&mut self, id: u64) {
+        self.analysers.remove(&id);
+    }
+
     pub fn configure_analyser(
         &mut self,
         id: u64,
@@ -959,5 +963,14 @@ mod tests {
         filter.process(0, 0.0);
         let after = filter.biquad.as_ref().unwrap().b0;
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn analyser_registry_releases_shared_state() {
+        let mut engine = super::AudioEngine::default();
+        let id = engine.create_analyser();
+        assert!(engine.analysers.contains_key(&id));
+        engine.destroy_analyser(id);
+        assert!(!engine.analysers.contains_key(&id));
     }
 }

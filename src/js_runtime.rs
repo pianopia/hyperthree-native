@@ -1120,6 +1120,25 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to register audio filter binding: {error}"))?;
 
         let audio_engine_for_analyser_create = audio_engine.clone();
+        let audio_engine_for_analyser_destroy = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioAnalyserDestroy"),
+                1,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        audio_engine_for_analyser_destroy
+                            .borrow_mut()
+                            .destroy_analyser(id);
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio analyser destroy binding: {error}")
+            })?;
+
         context
             .register_global_builtin_callable(
                 js_string!("__hyperthreeAudioAnalyserCreate"),
@@ -1954,6 +1973,7 @@ impl JsRuntime {
                   constructor(context) {
                     super(context);
                     this.__hyperthreeAnalyserId = __hyperthreeAudioAnalyserCreate();
+                    context.__hyperthreeAnalyserIds.push(this.__hyperthreeAnalyserId);
                     this._fftSize = 2048;
                     this._smoothingTimeConstant = 0.8;
                     this._minDecibels = -100;
@@ -2076,6 +2096,7 @@ impl JsRuntime {
                   constructor() {
                     this.sampleRate = 44100;
                     this.state = 'running';
+                    this.__hyperthreeAnalyserIds = [];
                     this.destination = { context: this, __hyperthreeSourceIds: [] };
                     const updateListenerPosition = () => __hyperthreeAudioSetListenerPosition(this.listener.positionX.value, this.listener.positionY.value, this.listener.positionZ.value);
                     this.listener = {
@@ -2111,7 +2132,12 @@ impl JsRuntime {
                   createAnalyser() { return new AnalyserNode(this); }
                   resume() { this.state = 'running'; return Promise.resolve(); }
                   suspend() { this.state = 'suspended'; return Promise.resolve(); }
-                  close() { this.state = 'closed'; return Promise.resolve(); }
+                  close() {
+                    for (const id of this.__hyperthreeAnalyserIds) __hyperthreeAudioAnalyserDestroy(id);
+                    this.__hyperthreeAnalyserIds = [];
+                    this.state = 'closed';
+                    return Promise.resolve();
+                  }
                 };
                 globalThis.webkitAudioContext = globalThis.webkitAudioContext || globalThis.AudioContext;
                 globalThis.Response = globalThis.Response || class Response {
@@ -3585,6 +3611,9 @@ mod tests {
                     const panner = context.createPanner();
                     const filter = context.createBiquadFilter();
                     const analyser = context.createAnalyser();
+                    const cleanupContext = new AudioContext();
+                    cleanupContext.createAnalyser();
+                    cleanupContext.close();
                     const source = context.createBufferSource();
                     source.buffer = audioBuffer;
                     filter.type = 'highpass';
@@ -3611,7 +3640,8 @@ mod tests {
                       source.playbackRate.value === 1.25 && source.detune.value === 1200 &&
                       panner.positionX.value === 2 && panner.positionY.value === 3 && panner.positionZ.value === -4 &&
                       filter.type === 'highpass' && filter.frequency.value === 440 && filter.Q.value === 0.8 &&
-                      analyser.frequencyBinCount === 16 && frequencyData.length === 16;
+                      analyser.frequencyBinCount === 16 && frequencyData.length === 16 &&
+                      cleanupContext.state === 'closed';
                   });
                 "#,
             )
