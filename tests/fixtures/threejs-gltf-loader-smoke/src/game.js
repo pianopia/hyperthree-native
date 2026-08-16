@@ -104,6 +104,7 @@ globalThis.__gltfQueueSyncSmoke = false;
 globalThis.__gltfComputeSmoke = false;
 globalThis.__gltfResourceDescriptorSmoke = false;
 globalThis.__gltfExternalTextureSmoke = false;
+globalThis.__gltfVideoFrameSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -128,12 +129,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   device.queue.submit([readbackEncoder.finish()]);
   await device.queue.onSubmittedWorkDone();
   globalThis.__gltfQueueSyncSmoke = true;
-  const externalImage = {
+  const externalFrame = new VideoFrame({
     width: 1,
     height: 1,
     data: new Uint8Array([5, 17, 29, 255]),
-  };
-  const externalTexture = device.importExternalTexture({ source: externalImage });
+  }, { timestamp: 1200 });
+  const externalTexture = device.importExternalTexture({ source: externalFrame });
   const externalSampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
   const externalLayout = device.createBindGroupLayout({ entries: [
     { binding: 0, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
@@ -191,10 +192,21 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const externalBytes = new Uint8Array(externalReadback.getMappedRange());
   globalThis.__gltfExternalTextureSmoke = externalBytes[0] === 5 && externalBytes[1] === 17 && externalBytes[2] === 29 && externalBytes[3] === 255;
   externalReadback.unmap();
+  const copiedFrameBytes = new Uint8Array(4);
+  await externalFrame.copyTo(copiedFrameBytes);
+  const clonedFrame = externalFrame.clone();
+  const videoFrameTexture = new THREE.VideoFrameTexture();
+  videoFrameTexture.setFrame(externalFrame);
+  globalThis.__gltfVideoFrameSmoke = externalFrame.displayWidth === 1 &&
+    externalFrame.displayHeight === 1 && externalFrame.timestamp === 1200 &&
+    copiedFrameBytes[0] === 5 && copiedFrameBytes[3] === 255 &&
+    clonedFrame.data[1] === 17 && videoFrameTexture.image === externalFrame && videoFrameTexture.needsUpdate === true;
+  clonedFrame.close();
   externalReadback.destroy();
   externalTarget.destroy();
   externalTexture.destroy();
   externalSampler.destroy();
+  externalFrame.close();
   const computeStorage = device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const computeReadback = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const computeShader = device.createShaderModule({ code: `
@@ -535,6 +547,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfComputeSmoke ||
       !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfExternalTextureSmoke ||
+      !globalThis.__gltfVideoFrameSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

@@ -111,6 +111,13 @@ RGBA `data`を受け取り、nativeの通常の2D `GPUTexture`へコピーして
 MAP_READ readbackをfixtureで検証済みである。これはブラウザの`GPUExternalTexture`と同じ
 ゼロコピー共有ではなく、安全なRGBA取り込みフォールバックであり、HTMLVideoElementの
 デコーダー、色空間変換、videoFrameCallback、フレーム更新スケジューリングは未実装である。
+WebCodecs境界として、packed RGBAを保持する`VideoFrame`の`codedWidth`、`codedHeight`、
+`displayWidth`、`displayHeight`、`timestamp`、`clone()`、`copyTo()`、`close()`も公開した。
+Three.jsの標準`VideoFrameTexture.setFrame()`へ渡し、同じframeを
+`importExternalTexture()`でnative GPUへサンプリングするfixtureを検証済みである。
+これはデコーダーから渡されたRGBA frameを受け取る契約であり、H.264/VP9/AV1等のcodec実装を
+JavaScriptへ持ち込むものではない。native decoderと連続frame schedulingは、OSごとの
+メディアバックエンドを選定した後にこの境界へ接続する。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。

@@ -2313,6 +2313,9 @@ impl JsRuntime {
                   }
                 };
                 globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
+                globalThis.DOMException = globalThis.DOMException || class DOMException extends Error {
+                  constructor(message = '', name = 'Error') { super(message); this.name = name; }
+                };
                 globalThis.createImageBitmap = globalThis.createImageBitmap || (async (source) => {
                   const decoded = __hyperthreeDecodeImage(source);
                   const bitmap = {
@@ -2324,6 +2327,61 @@ impl JsRuntime {
                   Object.setPrototypeOf(bitmap, ImageBitmap.prototype);
                   return bitmap;
                 });
+                globalThis.VideoFrame = globalThis.VideoFrame || class VideoFrame {
+                  constructor(source = {}, init = {}) {
+                    const payload = source && source.data !== undefined ? source.data : source;
+                    const bytes = payload instanceof ArrayBuffer
+                      ? new Uint8Array(payload)
+                      : ArrayBuffer.isView(payload)
+                        ? new Uint8Array(payload.buffer, payload.byteOffset || 0, payload.byteLength)
+                        : new Uint8Array(0);
+                    const width = Number(init.displayWidth ?? init.codedWidth ?? source.displayWidth ?? source.codedWidth ?? source.width);
+                    const height = Number(init.displayHeight ?? init.codedHeight ?? source.displayHeight ?? source.codedHeight ?? source.height);
+                    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+                      throw new TypeError('native VideoFrame requires positive width and height');
+                    }
+                    const expected = width * height * 4;
+                    if (bytes.byteLength < expected) throw new TypeError('native VideoFrame requires packed RGBA data');
+                    this.codedWidth = Number(init.codedWidth ?? source.codedWidth ?? width);
+                    this.codedHeight = Number(init.codedHeight ?? source.codedHeight ?? height);
+                    this.displayWidth = width;
+                    this.displayHeight = height;
+                    this.format = init.format ?? source.format ?? 'RGBA';
+                    this.timestamp = Number(init.timestamp ?? source.timestamp ?? 0);
+                    this.duration = init.duration ?? source.duration ?? null;
+                    this.data = new Uint8Array(bytes.slice(0, expected));
+                    this.closed = false;
+                  }
+                  close() {
+                    this.data = new Uint8Array(0);
+                    this.closed = true;
+                  }
+                  clone() {
+                    if (this.closed) throw new DOMException('VideoFrame is closed', 'InvalidStateError');
+                    return new VideoFrame(this.data, {
+                      codedWidth: this.codedWidth,
+                      codedHeight: this.codedHeight,
+                      displayWidth: this.displayWidth,
+                      displayHeight: this.displayHeight,
+                      format: this.format,
+                      timestamp: this.timestamp,
+                      duration: this.duration,
+                    });
+                  }
+                  allocationSize() {
+                    if (this.closed) throw new DOMException('VideoFrame is closed', 'InvalidStateError');
+                    return this.data.byteLength;
+                  }
+                  async copyTo(destination) {
+                    if (this.closed) throw new DOMException('VideoFrame is closed', 'InvalidStateError');
+                    const target = destination instanceof ArrayBuffer
+                      ? new Uint8Array(destination)
+                      : new Uint8Array(destination.buffer, destination.byteOffset || 0, destination.byteLength);
+                    if (target.byteLength < this.data.byteLength) throw new RangeError('VideoFrame destination is too small');
+                    target.set(this.data);
+                    return [{ offset: 0, stride: this.displayWidth * 4 }];
+                  }
+                };
                 globalThis.__hyperthreeMeshoptDecoder = globalThis.__hyperthreeMeshoptDecoder || {
                   supported: true,
                   ready: Promise.resolve(),
@@ -4402,6 +4460,41 @@ mod tests {
         runtime
             .execute_source(
                 "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi' || globalThis.__imageProbe !== true) throw new Error('fetch/image probe failed');",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn native_video_frame_exposes_webcodecs_compatible_rgba_shape() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__videoFrameProbe = false;
+                const frame = new VideoFrame({
+                  width: 2,
+                  height: 1,
+                  data: new Uint8Array([1, 2, 3, 255, 5, 6, 7, 255]),
+                }, { timestamp: 42 });
+                const target = new Uint8Array(8);
+                frame.copyTo(target).then((planes) => {
+                  const clone = frame.clone();
+                  globalThis.__videoFrameProbe = frame.codedWidth === 2 &&
+                    frame.displayHeight === 1 && frame.timestamp === 42 &&
+                    planes[0].stride === 8 && target[0] === 1 && target[7] === 255 &&
+                    clone.data[2] === 3;
+                  clone.close();
+                  frame.close();
+                });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source(
+                "if (globalThis.__videoFrameProbe !== true) throw new Error('VideoFrame probe failed');",
             )
             .unwrap();
     }
