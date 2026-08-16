@@ -1108,8 +1108,8 @@ mod tests {
                 const geometry = {
                   id: 42,
                   type: "BufferGeometry",
-                  attributes: { position: { array: [0, 0, 0, 1, 0, 0, 0, 1, 0] } },
-                  index: { array: [0, 1, 2] },
+                  attributes: { position: { array: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) } },
+                  index: { array: new Uint16Array([0, 1, 2]) },
                 };
                 const scene = {
                   updateMatrixWorld() {},
