@@ -10,7 +10,11 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 use js_runtime::JsRuntime;
 use project::Manifest;
 use renderer::Renderer;
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -69,14 +73,34 @@ fn project_path(path: PathBuf) -> PathBuf {
     }
 }
 
+fn runtime_root(script: &Path) -> PathBuf {
+    let mut candidate = script
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    loop {
+        if candidate.join("hyperthree.toml").is_file() || candidate.join("package.json").is_file() {
+            return candidate;
+        }
+        let Some(parent) = candidate.parent() else {
+            return candidate;
+        };
+        if parent == candidate {
+            return candidate;
+        }
+        candidate = parent.to_path_buf();
+    }
+}
+
 fn run_native(
     script: PathBuf,
     asset_path: Option<PathBuf>,
     manifest: Option<Manifest>,
+    asset_root: PathBuf,
 ) -> Result<()> {
     let render_state = bridge::NativeRenderState::shared();
     let input_state = bridge::NativeInputState::shared();
-    let mut runtime = JsRuntime::new(render_state.clone(), input_state.clone())?;
+    let mut runtime = JsRuntime::new(render_state.clone(), input_state.clone(), asset_root)?;
     runtime.execute_source(include_str!("../js/three-bridge.js"))?;
     runtime.execute_file(&script)?;
     runtime.execute_start()?;
@@ -215,9 +239,13 @@ fn main() -> Result<()> {
                 "native bundle not found: {}",
                 script.display()
             );
-            run_native(script, None, Some(manifest))
+            run_native(script, None, Some(manifest), root)
         }
         Some(Command::Diagnostics) => platform::print_diagnostics(),
-        None => run_native(project_path(cli.script), cli.asset.map(project_path), None),
+        None => {
+            let script = project_path(cli.script);
+            let asset_root = runtime_root(&script);
+            run_native(script, cli.asset.map(project_path), None, asset_root)
+        }
     }
 }

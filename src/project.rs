@@ -163,51 +163,33 @@ const INIT_GAME_JS: &str = r#"import * as THREE from "three";
 
 const scene = new THREE.Scene();
 scene.name = "AI-created HyperThree scene";
+const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 100);
+camera.position.set(0, 0, 4);
+camera.lookAt(0, 0, 0);
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(1.4, 1.4, 1.4),
+  new THREE.MeshBasicMaterial({ color: 0x19ccef }),
+);
+scene.add(cube);
 
 // Keep the game state independent from DOM/WebGL. HyperThree will expose the
 // native WebGPU bindings here as the runtime API is expanded.
 globalThis.HyperThreeGame = {
   scene,
+  camera,
+  cube,
   targetObjects: 500000,
   renderer: "native-wgpu"
 };
 
 HyperThreeNative.setClearColor(0.015, 0.02, 0.05, 1.0);
-HyperThreeNative.setCamera(0, 0, 4, 0, 0, 0, 60, 0.1, 100);
-HyperThreeNative.setCube(0, 0, 0, 1.4, 1.4, 1.4, 0.55, 0.1, 0.8, 0.95, 1, 0);
 
 let elapsed = 0;
 globalThis.HyperThreeGame.update = (deltaSeconds) => {
   elapsed += deltaSeconds;
-  HyperThreeNative.beginFrame();
-  HyperThreeNative.pushCube(
-    0,
-    Math.sin(elapsed) * 0.25,
-    0,
-    1.4,
-    1.4,
-    1.4,
-    elapsed + 0.55,
-    0.1,
-    0.8,
-    0.95,
-    1,
-    0,
-  );
-  HyperThreeNative.pushCube(
-    -1.5,
-    0,
-    0,
-    0.5,
-    0.5,
-    0.5,
-    -elapsed,
-    0.95,
-    0.35,
-    0.2,
-    1,
-    0,
-  );
+  cube.position.y = Math.sin(elapsed) * 0.25;
+  cube.rotation.y = elapsed + 0.55;
+  HyperThreeNative.syncThreeScene(scene, camera);
 };
 
 globalThis.HyperThreeGame.onStart = () => {};

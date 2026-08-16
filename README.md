@@ -49,6 +49,18 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
   --asset /path/to/asset.glb
 ```
 
+ゲームコードからは、プロジェクトルート配下のアセットをネイティブ側で
+memory-mapできます。
+
+```js
+const model = HyperThreeNative.loadAsset("public/models/player.glb");
+console.log(model.byteLength, model.meshCount, model.primitiveCount);
+```
+
+`src/game.mjs`などのES moduleエントリも、相対importとプロジェクトの
+`node_modules`パッケージ解決に対応しています。IIFEへバンドルする既存の
+Vite導線も引き続き利用できます。
+
 ## 構成
 
 - `src/main.rs`: ネイティブホストとイベントループ
@@ -68,6 +80,9 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
 `HyperThreeNative.setClearColor()`、`setCamera()`、`beginFrame()`、`pushCube()`で
 描画状態を更新し、`HyperThreeGame.update(deltaSeconds)`で毎フレーム処理できる
-開発導線までを提供します。任意のブラウザ向けThree.jsゲームをそのまま動かすには、
-DOM/WebGPU APIバインディング、入力・音声、GPU Driven Culling、Indirect Draw、
-glTF/KTX2の直接VRAM転送を引き続き実装する必要があります。
+開発導線までを提供します。`syncThreeScene(scene, camera)`は
+`BoxGeometry`、`PlaneGeometry`、`SphereGeometry`をネイティブ描画へ同期します。
+任意のブラウザ向けThree.jsゲームをそのまま動かすには、任意の
+`BufferGeometry`・マテリアル、DOM/WebGPU APIバインディング、入力・音声、
+GPU Driven Culling、Indirect Draw、glTF/KTX2の直接VRAM転送を引き続き実装する
+必要があります。

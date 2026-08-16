@@ -1,4 +1,4 @@
-use crate::bridge::{CameraSnapshot, CubeSnapshot, SharedRenderState};
+use crate::bridge::{CameraSnapshot, CubeSnapshot, GeometryKind, SharedRenderState};
 use anyhow::{Context as _, Result};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -49,6 +49,23 @@ const CUBE_INDICES: &[u16] = &[
     4, 5, 1, 1, 0, 4, // bottom
 ];
 
+const PLANE_VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+    },
+    Vertex {
+        position: [0.5, 0.5, 0.0],
+    },
+    Vertex {
+        position: [-0.5, 0.5, 0.0],
+    },
+];
+
+const PLANE_INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
@@ -63,8 +80,13 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    cube_vertex_buffer: wgpu::Buffer,
+    cube_index_buffer: wgpu::Buffer,
+    plane_vertex_buffer: wgpu::Buffer,
+    plane_index_buffer: wgpu::Buffer,
+    sphere_vertex_buffer: wgpu::Buffer,
+    sphere_index_buffer: wgpu::Buffer,
+    sphere_index_count: u32,
     instance_buffer: wgpu::Buffer,
     instance_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
@@ -185,14 +207,36 @@ impl Renderer {
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let cube_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hyperthree-cube-vertices"),
             contents: bytemuck::cast_slice(CUBE_VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let cube_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hyperthree-cube-indices"),
             contents: bytemuck::cast_slice(CUBE_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let plane_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hyperthree-plane-vertices"),
+            contents: bytemuck::cast_slice(PLANE_VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let plane_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hyperthree-plane-indices"),
+            contents: bytemuck::cast_slice(PLANE_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let (sphere_vertices, sphere_indices) = create_sphere_mesh(24, 16);
+        let sphere_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hyperthree-sphere-vertices"),
+            contents: bytemuck::cast_slice(&sphere_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let sphere_index_count = sphere_indices.len() as u32;
+        let sphere_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hyperthree-sphere-indices"),
+            contents: bytemuck::cast_slice(&sphere_indices),
             usage: wgpu::BufferUsages::INDEX,
         });
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -218,8 +262,13 @@ impl Renderer {
             queue,
             config,
             pipeline,
-            vertex_buffer,
-            index_buffer,
+            cube_vertex_buffer,
+            cube_index_buffer,
+            plane_vertex_buffer,
+            plane_index_buffer,
+            sphere_vertex_buffer,
+            sphere_index_buffer,
+            sphere_index_count,
             instance_buffer,
             instance_bind_group,
             depth_texture,
@@ -253,13 +302,34 @@ impl Renderer {
             log::warn!("native instance limit reached; rendering first {MAX_INSTANCES} cubes");
         }
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let instances: Vec<Instance> = snapshot.cubes[..instance_count]
-            .iter()
-            .map(|cube| Instance {
-                mvp: build_mvp(&snapshot.camera, cube, aspect),
-                color: cube.color.map(|component| component as f32),
-            })
-            .collect();
+        let mut instances = Vec::with_capacity(instance_count);
+        let mut batches = [
+            (GeometryKind::Cube, 0_usize),
+            (GeometryKind::Plane, 0_usize),
+            (GeometryKind::Sphere, 0_usize),
+        ];
+        for geometry in [
+            GeometryKind::Cube,
+            GeometryKind::Plane,
+            GeometryKind::Sphere,
+        ] {
+            let batch_start = instances.len();
+            for mesh in snapshot.cubes[..instance_count]
+                .iter()
+                .filter(|mesh| mesh.geometry as u8 == geometry as u8)
+            {
+                instances.push(Instance {
+                    mvp: build_mvp(&snapshot.camera, mesh, aspect),
+                    color: mesh.color.map(|component| component as f32),
+                });
+            }
+            batches[match geometry {
+                GeometryKind::Cube => 0,
+                GeometryKind::Plane => 1,
+                GeometryKind::Sphere => 2,
+            }]
+            .1 = instances.len() - batch_start;
+        }
         if !instances.is_empty() {
             self.queue
                 .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
@@ -303,14 +373,73 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.instance_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..CUBE_INDICES.len() as u32, 0, 0..instance_count as u32);
+            let mut instance_offset = 0;
+            for (geometry, count) in batches {
+                if count == 0 {
+                    continue;
+                }
+                let (vertex_buffer, index_buffer, index_count) = match geometry {
+                    GeometryKind::Cube => (
+                        &self.cube_vertex_buffer,
+                        &self.cube_index_buffer,
+                        CUBE_INDICES.len() as u32,
+                    ),
+                    GeometryKind::Plane => (
+                        &self.plane_vertex_buffer,
+                        &self.plane_index_buffer,
+                        PLANE_INDICES.len() as u32,
+                    ),
+                    GeometryKind::Sphere => (
+                        &self.sphere_vertex_buffer,
+                        &self.sphere_index_buffer,
+                        self.sphere_index_count,
+                    ),
+                };
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(
+                    0..index_count,
+                    0,
+                    instance_offset as u32..(instance_offset + count) as u32,
+                );
+                instance_offset += count;
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
     }
+}
+
+fn create_sphere_mesh(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) {
+    let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
+    for ring in 0..=rings {
+        let v = ring as f32 / rings as f32;
+        let phi = std::f32::consts::PI * v;
+        for segment in 0..=segments {
+            let u = segment as f32 / segments as f32;
+            let theta = std::f32::consts::TAU * u;
+            vertices.push(Vertex {
+                position: [theta.sin() * phi.sin(), phi.cos(), theta.cos() * phi.sin()],
+            });
+        }
+    }
+    let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
+    for ring in 0..rings {
+        for segment in 0..segments {
+            let first = ring * (segments + 1) + segment;
+            let second = first + segments + 1;
+            indices.extend_from_slice(&[
+                first as u16,
+                second as u16,
+                (first + 1) as u16,
+                second as u16,
+                (second + 1) as u16,
+                (first + 1) as u16,
+            ]);
+        }
+    }
+    (vertices, indices)
 }
 
 fn create_depth_resources(

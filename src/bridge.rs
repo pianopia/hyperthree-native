@@ -4,7 +4,15 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy)]
+pub enum GeometryKind {
+    Cube,
+    Plane,
+    Sphere,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct CubeSnapshot {
+    pub geometry: GeometryKind,
     pub position: [f64; 3],
     pub scale: [f64; 3],
     pub rotation_y: f64,
@@ -71,6 +79,7 @@ impl Default for NativeRenderState {
         Self {
             clear_color: [0.025, 0.04, 0.09, 1.0],
             cubes: vec![CubeSnapshot {
+                geometry: GeometryKind::Cube,
                 position: [0.0, 0.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
                 rotation_y: 0.0,
@@ -112,6 +121,7 @@ impl NativeRenderState {
         color: [f64; 4],
     ) {
         let cube = CubeSnapshot {
+            geometry: GeometryKind::Cube,
             position,
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
@@ -132,6 +142,39 @@ impl NativeRenderState {
         color: [f64; 4],
     ) {
         self.cubes.push(CubeSnapshot {
+            geometry: GeometryKind::Cube,
+            position,
+            scale: scale.map(|value| value.max(0.001)),
+            rotation_y,
+            color: color.map(|component| component.clamp(0.0, 1.0)),
+        });
+    }
+
+    pub fn push_plane(
+        &mut self,
+        position: [f64; 3],
+        scale: [f64; 3],
+        rotation_y: f64,
+        color: [f64; 4],
+    ) {
+        self.cubes.push(CubeSnapshot {
+            geometry: GeometryKind::Plane,
+            position,
+            scale: scale.map(|value| value.max(0.001)),
+            rotation_y,
+            color: color.map(|component| component.clamp(0.0, 1.0)),
+        });
+    }
+
+    pub fn push_sphere(
+        &mut self,
+        position: [f64; 3],
+        scale: [f64; 3],
+        rotation_y: f64,
+        color: [f64; 4],
+    ) {
+        self.cubes.push(CubeSnapshot {
+            geometry: GeometryKind::Sphere,
             position,
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,

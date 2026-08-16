@@ -8,9 +8,12 @@
 - [ ] macOS Metal, Windows DirectX 12/Vulkan, Linux Vulkan/software CI matrix
 - [x] Cross-platform CI skeleton and headless GPU backend diagnostics
 - [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
-- [ ] Native audio and sandboxed filesystem APIs
+- [x] Project-relative mmap asset API and glTF/GLB metadata inspection
+- [x] Boa ES module execution with relative and `node_modules` resolution
+- [ ] Native audio and sandboxed filesystem data APIs
 - [ ] Embedded V8 isolate and module/runtime compatibility
-- [ ] Three.js WebGPU renderer bindings
+- [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry
+- [ ] Three.js WebGPU renderer bindings for arbitrary BufferGeometry/materials
 - [ ] glTF/KTX2 zero-copy decode and GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms

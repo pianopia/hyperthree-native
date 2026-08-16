@@ -1,5 +1,5 @@
-// Browser-free seam for the future Three.js WebGPU renderer adapter.
-// The native host can replace these functions with V8-bound WebGPU objects.
+// Browser-free seam for Three.js scenes. The native host consumes a compact
+// render list instead of exposing DOM/WebGL objects to the game bundle.
 globalThis.HyperThreeNative = {
   version: "0.1.0",
   renderer: "wgpu-native",
@@ -22,5 +22,95 @@ globalThis.HyperThreeNative = {
   },
   isKeyDown(code) {
     return __hyperthreeIsKeyDown(code);
+  },
+  loadAsset(path) {
+    return __hyperthreeLoadAsset(path);
+  },
+  syncThreeScene(scene, camera, options = {}) {
+    const maxObjects = options.maxObjects ?? 4096;
+    let renderedObjects = 0;
+    let skippedObjects = 0;
+
+    if (scene && typeof scene.updateMatrixWorld === "function") {
+      scene.updateMatrixWorld(true);
+    }
+    if (camera && typeof camera.updateMatrixWorld === "function") {
+      camera.updateMatrixWorld(true);
+    }
+
+    if (camera) {
+      const position = camera.position || { x: 0, y: 0, z: 4 };
+      const elements = camera.matrixWorld?.elements;
+      const direction = elements
+        ? [-elements[8], -elements[9], -elements[10]]
+        : [0, 0, -1];
+      HyperThreeNative.setCamera(
+        position.x,
+        position.y,
+        position.z,
+        position.x + direction[0],
+        position.y + direction[1],
+        position.z + direction[2],
+        camera.fov ?? 60,
+        camera.near ?? 0.1,
+        camera.far ?? 100,
+      );
+    }
+
+    HyperThreeNative.beginFrame();
+    if (scene && typeof scene.traverse === "function") {
+      scene.traverse((object) => {
+        if (renderedObjects >= maxObjects || !object.visible || !object.isMesh) {
+          return;
+        }
+        const geometryType = object.geometry?.type;
+        const isCube = geometryType === "BoxGeometry" || geometryType === "BoxBufferGeometry";
+        const isPlane = geometryType === "PlaneGeometry" || geometryType === "PlaneBufferGeometry";
+        const isSphere = geometryType === "SphereGeometry" || geometryType === "SphereBufferGeometry";
+        if (!isCube && !isPlane && !isSphere) {
+          skippedObjects += 1;
+          return;
+        }
+        const elements = object.matrixWorld?.elements;
+        const position = elements
+          ? [elements[12], elements[13], elements[14]]
+          : [object.position?.x ?? 0, object.position?.y ?? 0, object.position?.z ?? 0];
+        const scale = object.scale || { x: 1, y: 1, z: 1 };
+        const rotationY = object.rotation?.y ?? 0;
+        const material = Array.isArray(object.material)
+          ? object.material[0]
+          : object.material;
+        const color = material?.color || { r: 0.1, g: 0.8, b: 0.95 };
+        const alpha = material?.opacity ?? 1;
+        const push = isPlane
+          ? HyperThreeNative.pushPlane
+          : isSphere
+            ? HyperThreeNative.pushSphere
+            : HyperThreeNative.pushCube;
+        push.call(
+          HyperThreeNative,
+          position[0],
+          position[1],
+          position[2],
+          scale.x,
+          scale.y,
+          scale.z,
+          rotationY,
+          color.r ?? 0.1,
+          color.g ?? 0.8,
+          color.b ?? 0.95,
+          alpha,
+          0,
+        );
+        renderedObjects += 1;
+      });
+    }
+    return { renderedObjects, skippedObjects };
+  },
+  pushPlane(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
+    __hyperthreePushPlane(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
+  },
+  pushSphere(x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, reserved = 0) {
+    __hyperthreePushSphere(x, y, z, sx, sy, sz, rotationY, r, g, b, a, reserved);
   },
 };
