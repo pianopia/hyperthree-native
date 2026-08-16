@@ -79,7 +79,7 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 経路で検証し、Three.jsが生成するtexture-array `textureLoad`のLOD型を現行Naga向けに
 正規化した。さらにプロジェクト相対`fetch()`、`Request`、`Response`、`Headers`、
 `Blob`、`ArrayBuffer`、`TextDecoder`、`createImageBitmap`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
-用意した。`navigator.userAgent`、`console`、data URL、PNG decode、
+用意した。`navigator.userAgent`、`console`、data URL、JPEG/PNG/WebP/GIF/BMP/HDR/EXR/TIFF decode、
 `GPUQueue.copyExternalImageToTexture`、GPUBuffer readbackも含め、Three.js 0.179の
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
 AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
@@ -145,7 +145,7 @@ JS sessionを再生成してentry pointを再実行するところまで検証�
 は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。残りは透明合成を含む
-present/device-loss lifecycle、DRACOの追加属性・point cloud、動画codecと連続frame scheduling、
+present/device-loss lifecycle、DRACO圧縮形式の追加組み合わせ、動画codecと連続frame scheduling、
 未実装の標準WebGPU APIを段階的に埋める。
 
 ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、
