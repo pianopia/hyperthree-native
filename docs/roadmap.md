@@ -47,8 +47,10 @@
 - [x] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
 - [x] Standard KTX2Loader raw BC1 path through KHR_texture_basisu and native GPU upload
 - [x] Native BasisLZ/UASTC transcoder binding with KTX2Loader bridge and compressed/uncompressed target selection
+- [x] Native raw KTX2 mip/face transfer without a browser Worker
 - [ ] UASTC KTX2 end-to-end fixture across supported GPU target formats
-- [ ] DRACO native decode and full material/animation GPU upload
+- [x] DRACO native mesh decode through standard GLTFLoader/DRACOLoader with Khronos Box fixture
+- [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
 

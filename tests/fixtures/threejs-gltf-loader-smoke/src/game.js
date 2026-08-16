@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { WebGPURenderer } from "three/webgpu";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 
@@ -79,6 +80,7 @@ globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
 globalThis.__gltfKtx2NativeHook = false;
 globalThis.__gltfBasisKtx2Loaded = false;
+globalThis.__gltfDracoLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
@@ -169,14 +171,21 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
   const loader = new GLTFLoader();
+  const dracoLoader = new DRACOLoader();
+  loader.setDRACOLoader(dracoLoader);
   loader.setKTX2Loader(ktx2Loader);
-  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf] = await Promise.all([
-    loader.loadAsync("public/scene.gltf"),
-    loader.loadAsync("public/generated/scene-external.gltf"),
-    loader.loadAsync("public/generated/scene.glb"),
-    loader.loadAsync("public/generated/scene-meshopt.gltf"),
-    loader.loadAsync("public/generated/scene-ktx2.gltf"),
-    loader.loadAsync("public/generated/scene-ktx2-basis.gltf"),
+  const trackLoad = (label, promise) => promise.then((value) => {
+    globalThis.__gltfSmokeStage = `loaded-${label}`;
+    return value;
+  });
+  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf, dracoGltf] = await Promise.all([
+    trackLoad("gltf", loader.loadAsync("public/scene.gltf")),
+    trackLoad("external", loader.loadAsync("public/generated/scene-external.gltf")),
+    trackLoad("glb", loader.loadAsync("public/generated/scene.glb")),
+    trackLoad("meshopt", loader.loadAsync("public/generated/scene-meshopt.gltf")),
+    trackLoad("ktx2", loader.loadAsync("public/generated/scene-ktx2.gltf")),
+    trackLoad("basis", loader.loadAsync("public/generated/scene-ktx2-basis.gltf")),
+    trackLoad("draco", loader.loadAsync("public/generated/scene-draco.gltf")),
   ]);
   globalThis.__gltfSmokeStage = "after-gltf-load";
   const skinned = gltf.scene.getObjectByProperty("isSkinnedMesh", true);
@@ -212,6 +221,13 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     basisKtx2Textured.material.map.image?.width > 0 &&
     basisKtx2Textured.material.map.image?.height > 0,
   );
+  const dracoMesh = dracoGltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfDracoLoaded = Boolean(
+    dracoMesh?.geometry?.attributes?.position?.count === 24 &&
+    dracoMesh.geometry.attributes.normal?.count === 24 &&
+    dracoMesh.geometry.index?.count === 36 &&
+    globalThis.__hyperthreeDracoNativeCalls > 0,
+  );
   if (!globalThis.__gltfExternalTexture) throw new Error("external glTF image texture did not decode");
   if (!globalThis.__gltfGlbLoaded) throw new Error("GLB container did not load through GLTFLoader");
   scene.add(gltf.scene);
@@ -219,6 +235,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   scene.add(glb.scene);
   scene.add(ktx2Gltf.scene);
   scene.add(basisKtx2Gltf.scene);
+  scene.add(dracoGltf.scene);
   globalThis.__gltfEnvironmentSmoke = scene.environment === environmentTexture;
   globalThis.__gltfSmokeStage = "before-render";
   const mrt = new THREE.RenderTarget(64, 64, { count: 2, depthBuffer: true });
@@ -232,7 +249,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfDracoLoaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

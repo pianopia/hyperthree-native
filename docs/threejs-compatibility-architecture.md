@@ -102,16 +102,27 @@ Three.js側の`GLTFLoader`へnative MeshoptDecoderを自動注入し、属性・
 圧縮glTFを標準`loadAsync()`で読み込むfixtureまで検証済みである。さらに標準
 `KTX2Loader`を`GLTFLoader.setKTX2Loader()`へ接続し、`KHR_texture_basisu`のraw BC1 KTX2を
 GPU圧縮テクスチャとして読み込むfixtureも検証済みである。さらにnative `basisu` transcoderを
-`KTX2Loader`のworker境界へ差し込み、BasisLZ/UASTCをASTC/BC7/BC3/BC1/ETC2/RGBA32へ
-実行時選択できるようにした。BasisLZの8×8実ファイルfixtureは標準GLTFLoader経由で検証済みで、
-UASTCのGPUターゲット別fixtureとDRACOは未完了である。
+`KTX2Loader`のworker境界へ差し込み、raw KTX2のmip/face payloadと、BasisLZ/UASTCを
+ASTC/BC7/BC3/BC1/ETC2/RGBA32へ実行時選択できるようにした。BasisLZの8×8実ファイル
+fixtureとraw BC1 fixtureは標準GLTFLoader経由で検証済みである。
+
+### Draco
+
+`DRACOLoader`のworker decode境界には`__hyperthreeDecodeDraco`を注入する。Rust側は
+`draco-oxide-decoder`で三角形meshを復号し、POSITION/NORMAL/TANGENT/TEXCOORD/COLOR/skin
+属性とindexをThree.jsの`BufferGeometry`形状へ戻す。Khronos公式Boxの
+`KHR_draco_mesh_compression` glTFを、標準GLTFLoader/DRACOLoader経由でnative decodeする
+fixtureを検証済みである。UASTCのGPUターゲット別fixture、Dracoのpoint cloud/standalone API、
+および全属性・morph/animationの網羅は継続課題である。
 
 WebGPU側は、実GPUが提供するBC/ETC2/ASTC圧縮機能を`GPUAdapter.features`/`GPUDevice.features`
 へ公開し、Three.jsの圧縮テクスチャ経路が使う形式名をwgpuへ変換する。`queue.writeTexture()`
-は圧縮ブロックのbytesPerRowとmipLevelを保持してネイティブへ渡す。raw KTX2は標準
-KTX2Loaderが解析し、`CompressedTexture`のBC1データをネイティブGPUへ渡せる。
+は圧縮ブロックのbytesPerRowとmipLevelを保持してネイティブへ渡す。raw KTX2はnative
+bridgeがKTX2Loader互換のlevel/face配列を作り、`CompressedTexture`のBC1データを
+ネイティブGPUへ渡せる。
 BasisLZ/UASTCのKTX2コンテナはnative transcoderが全mip/face/layerを展開し、
-worker互換の`faces[].mipmaps[]`としてThree.jsへ返す。BasisLZの実ファイルfixtureは検証済みで、
+raw KTX2とBasisLZ/UASTCの結果をworker互換の`faces[].mipmaps[]`としてThree.jsへ返す。
+BasisLZの実ファイルfixtureは検証済みで、
 UASTCのGPUターゲット選択fixtureは次段階である。
 
 ### Phase B: Three.js renderer実行

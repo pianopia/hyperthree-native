@@ -41,6 +41,11 @@ const basisLzKtx2 = Buffer.from(
   "base64",
 );
 
+const dracoBox = Buffer.from(
+  "RFJBQ08CAgEBAAAACAwBCwAAA19bCgEBEFUEXOONRgL/AAAAAQABAAkDAAECAQEJAwAAAwEBAQADAwEwARADACSWEwokBAAAAAD/BwAAAAAAvwAAAL8AAAC/AACAPwsGAwEBAQEBQAEA/wAAAH8AAAD/AqFBCAAA",
+  "base64",
+);
+
 const makeKtx2Bc1 = () => {
   const width = 4;
   const height = 4;
@@ -160,6 +165,37 @@ basisKtx2Document.images = [{ uri: "scene-ktx2-basis.ktx2", mimeType: "image/ktx
 basisKtx2Document.textures = [{ extensions: { KHR_texture_basisu: { source: 0 } } }];
 await writeFile(new URL("scene-ktx2-basis.ktx2", generated), basisLzKtx2);
 await writeFile(new URL("scene-ktx2-basis.gltf", generated), JSON.stringify(basisKtx2Document, null, 2));
+
+const dracoDocument = {
+  asset: { version: "2.0", generator: "Khronos glTF Sample Assets" },
+  scene: 0,
+  scenes: [{ nodes: [0] }],
+  nodes: [{ mesh: 0 }],
+  meshes: [{ primitives: [{
+    attributes: { NORMAL: 0, POSITION: 1 },
+    indices: 2,
+    mode: 4,
+    material: 0,
+    extensions: {
+      KHR_draco_mesh_compression: {
+        bufferView: 0,
+        attributes: { NORMAL: 0, POSITION: 1 },
+      },
+    },
+  }] }],
+  accessors: [
+    { componentType: 5126, count: 24, type: "VEC3", max: [1.007843137254902, 1.007843137254902, 1.007843137254902], min: [-1.007843137254902, -1.007843137254902, -1.007843137254902] },
+    { componentType: 5126, count: 24, type: "VEC3", max: [0.5004885197850513, 0.5004885197850513, 0.5004885197850513], min: [-0.5004885197850513, -0.5004885197850513, -0.5004885197850513] },
+    { componentType: 5123, count: 36, type: "SCALAR", max: [23], min: [0] },
+  ],
+  materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.8, 0.05, 0.02, 1], metallicFactor: 0.1, roughnessFactor: 0.8 } }],
+  buffers: [{ byteLength: dracoBox.length, uri: "scene-draco.bin" }],
+  bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: dracoBox.length }],
+  extensionsUsed: ["KHR_draco_mesh_compression"],
+  extensionsRequired: ["KHR_draco_mesh_compression"],
+};
+await writeFile(new URL("scene-draco.bin", generated), dracoBox);
+await writeFile(new URL("scene-draco.gltf", generated), JSON.stringify(dracoDocument, null, 2));
 
 const glbDocument = makeDocument({ glb: true });
 const json = Buffer.from(JSON.stringify(glbDocument));

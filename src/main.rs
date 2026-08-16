@@ -1,5 +1,6 @@
 mod asset;
 mod bridge;
+mod draco;
 mod js_runtime;
 mod platform;
 mod project;

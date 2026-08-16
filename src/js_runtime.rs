@@ -1,6 +1,7 @@
 use crate::{
     asset::{decode_meshopt_buffer, AssetStore},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
+    draco::decode_mesh as decode_draco_mesh,
     webgpu::SharedNativeWebGpuContext,
 };
 use anyhow::{Context as _, Result};
@@ -834,16 +835,77 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to register meshopt binding: {error}"))?;
 
         context
+            .register_global_builtin_callable(js_string!("__hyperthreeDecodeDraco"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = byte_array_value(args.get_or_undefined(0), context)?;
+                    let geometry = decode_draco_mesh(&source).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to decode Draco geometry: {error}"))
+                    })?;
+
+                    let index_bytes = bytemuck::cast_slice::<u32, u8>(&geometry.indices).to_vec();
+                    let index = JsArrayBuffer::from_byte_block(
+                        AlignedVec::from_iter(0, index_bytes),
+                        context,
+                    )
+                    .map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to create Draco index buffer: {error}"))
+                    })?;
+                    let mut attributes = Vec::with_capacity(geometry.attributes.len());
+                    for attribute in geometry.attributes {
+                        let data_bytes = bytemuck::cast_slice::<f32, u8>(&attribute.data).to_vec();
+                        let data = JsArrayBuffer::from_byte_block(
+                            AlignedVec::from_iter(0, data_bytes),
+                            context,
+                        )
+                        .map_err(|error| {
+                            JsNativeError::error().with_message(format!(
+                                "failed to create Draco attribute buffer: {error}"
+                            ))
+                        })?;
+                        let value = JsObject::with_object_proto(context.intrinsics());
+                        value.set(
+                            js_string!("name"),
+                            js_string!(attribute.name),
+                            false,
+                            context,
+                        )?;
+                        value.set(
+                            js_string!("itemSize"),
+                            JsValue::from(attribute.item_size as f64),
+                            false,
+                            context,
+                        )?;
+                        value.set(js_string!("data"), data, false, context)?;
+                        attributes.push(value.into());
+                    }
+                    let result = JsObject::with_object_proto(context.intrinsics());
+                    result.set(js_string!("index"), index, false, context)?;
+                    result.set(
+                        js_string!("attributes"),
+                        JsArray::from_iter(attributes, context),
+                        false,
+                        context,
+                    )?;
+                    Ok(result.into())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register Draco binding: {error}"))?;
+
+        context
             .register_global_builtin_callable(js_string!("__hyperthreeTranscodeKtx2"), 2, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
 
                     // A non-zero vkFormat identifies a KTX2 file whose payload is
-                    // already GPU-ready. Leave those files to KTX2Loader's raw path.
-                    if source.len() < 16
-                        || u32::from_le_bytes([source[12], source[13], source[14], source[15]]) != 0
-                    {
+                    // already GPU-ready. Shape the raw levels directly so the
+                    // standard KTX2Loader worker is not required in the native host.
+                    if source.len() < 16 {
                         return Ok(JsValue::null());
+                    }
+                    if u32::from_le_bytes([source[12], source[13], source[14], source[15]]) != 0 {
+                        return raw_ktx2_result(&source, context);
                     }
 
                     let transcoder = Transcoder::new(&source).map_err(|error| {
@@ -1403,11 +1465,14 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         source.to_string()
     };
 
-    let is_gltf_loader_bundle =
-        source.contains("GLTFLoader") || source.contains("THREE.GLTFLoader");
+    let is_gltf_loader_bundle = source.contains("GLTFLoader")
+        || source.contains("THREE.GLTFLoader")
+        || source.contains("dracoLoader.preload");
     let is_ktx2_loader_bundle = source.contains("KTX2Loader");
+    let is_draco_loader_bundle = source.contains("DRACOLoader")
+        || (source.contains("decodeDracoFile") && source.contains("draco_decoder"));
     let mut boa_changed = false;
-    if is_gltf_loader_bundle || is_ktx2_loader_bundle {
+    if is_gltf_loader_bundle || is_ktx2_loader_bundle || is_draco_loader_bundle {
         boa_changed = normalize_boa_class_constructor_bindings(&mut normalized);
     }
     if is_gltf_loader_bundle {
@@ -1434,6 +1499,21 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
                 boa_changed = true;
             }
         }
+        for (from, to) in [
+            (
+                "this.dracoLoader.preload();",
+                "if ( ! globalThis.__hyperthreeDecodeDraco ) this.dracoLoader.preload();",
+            ),
+            (
+                "this.dracoLoader.preload()",
+                "globalThis.__hyperthreeDecodeDraco ? this.dracoLoader : this.dracoLoader.preload()",
+            ),
+        ] {
+            if normalized.contains(from) {
+                normalized = normalized.replace(from, to);
+                boa_changed = true;
+            }
+        }
     }
     if is_ktx2_loader_bundle {
         for (from, to) in [
@@ -1450,6 +1530,123 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
                 normalized = normalized.replace(from, to);
                 boa_changed = true;
             }
+        }
+        let minified_ktx_from = "async _createTexture(e,t={}){const s=oS(new Uint8Array(e)),i=";
+        let minified_ktx_to = r#"async _createTexture(e,t={}){const s=oS(new Uint8Array(e));if(globalThis.__hyperthreeKtx2Transcode){const r=await globalThis.__hyperthreeKtx2Transcode(new Uint8Array(e),this.workerConfig||t||{});if(r){r.data.format=this.constructor.EngineFormat[r.data.format];r.data.type=this.constructor.EngineType[r.data.type];return this._createTextureFrom(r,s)}}const i="#;
+        if normalized.contains(minified_ktx_from)
+            && !normalized
+                .contains("__hyperthreeKtx2Transcode(new Uint8Array(e),this.workerConfig||t||{})")
+        {
+            normalized = normalized.replace(minified_ktx_from, minified_ktx_to);
+            boa_changed = true;
+        }
+    }
+    if is_draco_loader_bundle {
+        for (from, to) in [
+            (
+                "preload() {\n\n\t\tthis._initDecoder();",
+                "preload() {\n\n\t\tif ( globalThis.__hyperthreeDecodeDraco ) return this;\n\n\t\tthis._initDecoder();",
+            ),
+            (
+                "preload() {\n      this._initDecoder();",
+                "preload() {\n      if ( globalThis.__hyperthreeDecodeDraco ) return this;\n      this._initDecoder();",
+            ),
+            (
+                "preload(){return this._initDecoder(),this}",
+                "preload(){if(globalThis.__hyperthreeDecodeDraco)return this;return this._initDecoder(),this}",
+            ),
+        ] {
+            if normalized.contains(from) {
+                normalized = normalized.replace(from, to);
+                boa_changed = true;
+            }
+        }
+        let from = r#"decodeDracoFile( buffer, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {} ) {"#;
+        let to = r#"decodeDracoFile( buffer, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {} ) {
+
+		if ( globalThis.__hyperthreeDecodeDraco ) {
+
+			try {
+
+				globalThis.__hyperthreeDracoNativeCalls = ( globalThis.__hyperthreeDracoNativeCalls || 0 ) + 1;
+				const nativeResult = globalThis.__hyperthreeDecodeDraco( new Uint8Array( buffer ) );
+				const requestedTypes = attributeTypes || this.defaultAttributeTypes;
+				const attributes = [];
+
+				for ( const nativeAttribute of nativeResult.attributes ) {
+
+					const typeName = requestedTypes[ nativeAttribute.name ] || 'Float32Array';
+					const ArrayType = globalThis[ typeName ] || Float32Array;
+					const values = new Float32Array( nativeAttribute.data );
+					const typedValues = ArrayType === Float32Array ? values : new ArrayType( values );
+					attributes.push( { name: nativeAttribute.name, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace: vertexColorSpace } );
+
+				}
+
+				const geometry = this._createGeometry( { index: { array: new Uint32Array( nativeResult.index ) }, attributes: attributes } );
+				return Promise.resolve( geometry ).then( callback ).catch( onError );
+
+			} catch ( error ) {
+
+				return Promise.reject( error ).catch( onError );
+
+			}
+
+		}
+"#;
+        if normalized.contains(from) {
+            normalized = normalized.replace(from, to);
+            boa_changed = true;
+        }
+        let bundled_from = r#"decodeDracoFile(buffer2, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {
+    }) {"#;
+        let bundled_hook = r#"
+      if (globalThis.__hyperthreeDecodeDraco) {
+        try {
+          globalThis.__hyperthreeDracoNativeCalls = (globalThis.__hyperthreeDracoNativeCalls || 0) + 1;
+          const nativeResult = globalThis.__hyperthreeDecodeDraco(new Uint8Array(buffer2));
+          const requestedTypes = attributeTypes || this.defaultAttributeTypes;
+          const attributes = [];
+          for (const nativeAttribute of nativeResult.attributes) {
+            const typeName = requestedTypes[nativeAttribute.name] || 'Float32Array';
+            const ArrayType = globalThis[typeName] || Float32Array;
+            const values = new Float32Array(nativeAttribute.data);
+            const typedValues = ArrayType === Float32Array ? values : new ArrayType(values);
+            attributes.push({name: nativeAttribute.name, array: typedValues, itemSize: nativeAttribute.itemSize, vertexColorSpace});
+          }
+          const geometry = this._createGeometry({index: {array: new Uint32Array(nativeResult.index)}, attributes});
+          return Promise.resolve(geometry).then(callback).catch(onError);
+        } catch (error) {
+          return Promise.reject(error).catch(onError);
+        }
+      }
+"#;
+        if normalized.contains(bundled_from)
+            && !normalized.contains(
+                "const nativeResult = globalThis.__hyperthreeDecodeDraco(new Uint8Array(buffer2))",
+            )
+        {
+            normalized = normalized.replace(bundled_from, &format!("{bundled_from}{bundled_hook}"));
+            boa_changed = true;
+        }
+        let minified_from = "decodeDracoFile(e,t,s,i,n=ot,r=()=>{}){";
+        let minified_hook = r#"if(globalThis.__hyperthreeDecodeDraco){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const o=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e)),a=i||this.defaultAttributeTypes,c=[];for(const e of o.attributes){const A=a[e.name]||'Float32Array',p=globalThis[A]||Float32Array,f=new Float32Array(e.data),g=p===Float32Array?f:new p(f);c.push({name:e.name,array:g,itemSize:e.itemSize,vertexColorSpace:n})}const h=this._createGeometry({index:{array:new Uint32Array(o.index)},attributes:c});return Promise.resolve(h).then(t).catch(r)}catch(e){return Promise.reject(e).catch(r)}}"#;
+        if normalized.contains(minified_from)
+            && !normalized.contains("new Uint8Array(e),a=i||this.defaultAttributeTypes")
+        {
+            normalized =
+                normalized.replace(minified_from, &format!("{minified_from}{minified_hook}"));
+            boa_changed = true;
+        }
+        let minified_from_alt = "decodeDracoFile(e,t,s,i,n=at,r=()=>{}){";
+        if normalized.contains(minified_from_alt)
+            && !normalized.contains("new Uint8Array(e),a=i||this.defaultAttributeTypes")
+        {
+            normalized = normalized.replace(
+                minified_from_alt,
+                &format!("{minified_from_alt}{minified_hook}"),
+            );
+            boa_changed = true;
         }
     }
     if boa_changed || normalized != source {
@@ -1955,6 +2152,110 @@ fn byte_array_value(value: &JsValue, context: &mut Context) -> JsResult<Vec<u8>>
     Ok(bytes)
 }
 
+fn raw_ktx2_result(source: &[u8], context: &mut Context) -> JsResult<JsValue> {
+    if source.len() < 104 {
+        return Ok(JsValue::null());
+    }
+    let vk_format = u32::from_le_bytes(source[12..16].try_into().unwrap());
+    let (format, type_name) = match vk_format {
+        134 => ("RGBA_S3TC_DXT1_Format", "UnsignedByteType"),
+        137 => ("RGBA_S3TC_DXT5_Format", "UnsignedByteType"),
+        145 => ("RGBA_BPTC_Format", "UnsignedByteType"),
+        151 => ("RGBA_ETC2_EAC_Format", "UnsignedByteType"),
+        _ => return Ok(JsValue::null()),
+    };
+    let width = u32::from_le_bytes(source[20..24].try_into().unwrap());
+    let height = u32::from_le_bytes(source[24..28].try_into().unwrap());
+    let level_count = u32::from_le_bytes(source[36..40].try_into().unwrap()).max(1);
+    let face_count = u32::from_le_bytes(source[44..48].try_into().unwrap()).max(1);
+    let mut faces = Vec::with_capacity(face_count as usize);
+    for face in 0..face_count {
+        let mut mipmaps = Vec::with_capacity(level_count as usize);
+        for level in 0..level_count {
+            let entry = 80usize
+                .checked_add(level as usize * 24)
+                .ok_or_else(|| JsNativeError::range().with_message("KTX2 level index overflow"))?;
+            if entry + 24 > source.len() {
+                return Err(JsNativeError::range()
+                    .with_message("KTX2 level index is outside the source")
+                    .into());
+            }
+            let offset = u64::from_le_bytes(source[entry..entry + 8].try_into().unwrap()) as usize;
+            let length =
+                u64::from_le_bytes(source[entry + 8..entry + 16].try_into().unwrap()) as usize;
+            let face_length = length / face_count as usize;
+            let face_offset = offset
+                .checked_add(face as usize * face_length)
+                .ok_or_else(|| JsNativeError::range().with_message("KTX2 face offset overflow"))?;
+            let end = face_offset
+                .checked_add(face_length)
+                .ok_or_else(|| JsNativeError::range().with_message("KTX2 face range overflow"))?;
+            if end > source.len() {
+                return Err(JsNativeError::range()
+                    .with_message("KTX2 level payload is outside the source")
+                    .into());
+            }
+            let data = JsArrayBuffer::from_byte_block(
+                AlignedVec::from_iter(0, source[face_offset..end].to_vec()),
+                context,
+            )
+            .map_err(|error| {
+                JsNativeError::error()
+                    .with_message(format!("failed to create raw KTX2 buffer: {error}"))
+            })?;
+            let mipmap = JsObject::with_object_proto(context.intrinsics());
+            mipmap.set(js_string!("data"), data, false, context)?;
+            mipmap.set(
+                js_string!("width"),
+                JsValue::from((width >> level).max(1) as f64),
+                false,
+                context,
+            )?;
+            mipmap.set(
+                js_string!("height"),
+                JsValue::from((height >> level).max(1) as f64),
+                false,
+                context,
+            )?;
+            mipmaps.push(mipmap.into());
+        }
+        let face_value = JsObject::with_object_proto(context.intrinsics());
+        face_value.set(
+            js_string!("mipmaps"),
+            JsArray::from_iter(mipmaps, context),
+            false,
+            context,
+        )?;
+        faces.push(face_value.into());
+    }
+    let data = JsObject::with_object_proto(context.intrinsics());
+    data.set(
+        js_string!("faces"),
+        JsArray::from_iter(faces, context),
+        false,
+        context,
+    )?;
+    data.set(
+        js_string!("width"),
+        JsValue::from(width as f64),
+        false,
+        context,
+    )?;
+    data.set(
+        js_string!("height"),
+        JsValue::from(height as f64),
+        false,
+        context,
+    )?;
+    data.set(js_string!("format"), js_string!(format), false, context)?;
+    data.set(js_string!("type"), js_string!(type_name), false, context)?;
+    data.set(js_string!("dfdFlags"), JsValue::from(0), false, context)?;
+    let result = JsObject::with_object_proto(context.intrinsics());
+    result.set(js_string!("type"), js_string!("transcode"), false, context)?;
+    result.set(js_string!("data"), data, false, context)?;
+    Ok(result.into())
+}
+
 fn js_bool_property(value: &JsValue, property: &str, context: &mut Context) -> JsResult<bool> {
     if value.is_null() || value.is_undefined() {
         return Ok(false);
@@ -2097,6 +2398,27 @@ mod tests {
         assert!(normalized.contains("__hyperthreeKtx2Transcode"));
         assert!(normalized.contains("new Uint8Array( buffer )"));
         assert!(normalized.contains("KTX2Loader.EngineFormat"));
+        let minified = "/* KTX2Loader */ async _createTexture(e,t={}){const s=oS(new Uint8Array(e)),i=1; return i;}";
+        let normalized = normalize_three_compatibility_source(minified);
+        assert!(normalized.contains("__hyperthreeKtx2Transcode"));
+    }
+
+    #[test]
+    fn injects_native_draco_decoder_and_skips_worker_preload() {
+        let source = r#"/* DRACOLoader */ class DRACOLoader{preload() {
+
+		this._initDecoder();
+
+		return this;
+	}
+	decodeDracoFile( buffer, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {} ) { return this.decodeGeometry( buffer, {} ); }}"#;
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("__hyperthreeDecodeDraco"));
+        assert!(normalized.contains("__hyperthreeDracoNativeCalls"));
+        assert!(normalized.contains("if ( globalThis.__hyperthreeDecodeDraco ) return this;"));
+        let minified = "/* DRACOLoader */ preload(){return this._initDecoder(),this} decodeDracoFile(e,t,s,i,n=at,r=()=>{}){}";
+        let normalized = normalize_three_compatibility_source(minified);
+        assert!(normalized.contains("__hyperthreeDecodeDraco"));
     }
 
     #[cfg(any())]
