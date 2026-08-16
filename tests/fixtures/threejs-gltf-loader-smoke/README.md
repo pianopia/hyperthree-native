@@ -30,6 +30,6 @@ BasisLZ asset exercises native transcoding with the current device target.
 The UASTC asset exercises raw UASTC block transcoding to the device-selected
 RGBA/BC7 target path.
 The WAV asset exercises the native `AudioContext`/`AudioBuffer` compatibility
-path without requiring an audio device during headless validation. The bundled
-Three.js `AudioLoader` constructor remains a separate Boa compatibility case and
-is intentionally not represented as passing by this fixture.
+path without requiring an audio device during headless validation. It is loaded
+through the public `AudioLoader` export from the `three` package, not an internal
+source-module import.

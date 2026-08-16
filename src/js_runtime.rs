@@ -1753,9 +1753,6 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
     let is_draco_loader_bundle = source.contains("DRACOLoader")
         || (source.contains("decodeDracoFile") && source.contains("draco_decoder"));
     let mut boa_changed = false;
-    if is_gltf_loader_bundle || is_ktx2_loader_bundle || is_draco_loader_bundle {
-        boa_changed = normalize_boa_class_constructor_bindings(&mut normalized);
-    }
     if source.contains("decodeAudioData") {
         boa_changed |= normalize_boa_audio_context_binding(&mut normalized);
     }
@@ -1933,6 +1930,16 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
             boa_changed = true;
         }
     }
+    if is_gltf_loader_bundle
+        || is_ktx2_loader_bundle
+        || is_draco_loader_bundle
+        || source.contains("decodeAudioData")
+    {
+        boa_changed |= normalize_boa_class_method_bindings(&mut normalized);
+    }
+    if source.contains("decodeAudioData") {
+        boa_changed |= normalize_boa_audio_loader_method(&mut normalized);
+    }
     if boa_changed || normalized != source {
         std::borrow::Cow::Owned(normalized)
     } else {
@@ -1940,13 +1947,13 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
     }
 }
 
-/// Boa 0.21.1 can allocate zero lexical slots for a class constructor and
-/// then emit `PutLexicalValue` for a local `const`/`let`, which panics at
-/// runtime. Three.js loaders contain many such constructors. Restrict the
-/// compatibility rewrite to constructor bodies; game code and ordinary
-/// functions retain normal lexical semantics.
-fn normalize_boa_class_constructor_bindings(source: &mut String) -> bool {
-    let ranges = class_constructor_ranges(source);
+/// Boa 0.21.1 can allocate zero lexical slots for a class method and then emit
+/// `PutLexicalValue` for a local `const`/`let`, which panics at runtime. Three.js
+/// loaders contain methods with local bindings, notably AudioLoader.load().
+/// Restrict the compatibility rewrite to methods in class bodies; game code
+/// and ordinary functions retain normal lexical semantics.
+fn normalize_boa_class_method_bindings(source: &mut String) -> bool {
+    let ranges = class_method_ranges(source);
     if ranges.is_empty() {
         return false;
     }
@@ -2003,7 +2010,66 @@ fn normalize_boa_audio_context_binding(source: &mut String) -> bool {
     true
 }
 
-fn class_constructor_ranges(source: &str) -> Vec<(usize, usize)> {
+/// The bundled AudioLoader method is not reliably assigned a lexical
+/// environment by Boa even when its surrounding class is detected by the
+/// general class scanner. Normalize only that method, identified by the
+/// `decodeAudioData` call it owns.
+fn normalize_boa_audio_loader_method(source: &mut String) -> bool {
+    let Some(marker) = source.find("decodeAudioData") else {
+        return false;
+    };
+    let Some(class_start) = source[..marker].rfind("class ") else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let Some(class_open) = next_code_byte(bytes, class_start + 6, bytes.len(), b'{') else {
+        return false;
+    };
+    let Some(class_close) = matching_delimiter(bytes, class_open, b'{', b'}') else {
+        return false;
+    };
+    let mut cursor = class_open + 1;
+    while cursor < class_close {
+        let Some((identifier_end, identifier)) = next_code_identifier(bytes, cursor, class_close)
+        else {
+            break;
+        };
+        cursor = identifier_end;
+        if identifier != "load" {
+            continue;
+        }
+        let Some(parameter_open) = next_code_byte(bytes, cursor, class_close, b'(') else {
+            continue;
+        };
+        let Some(parameter_close) = matching_delimiter(bytes, parameter_open, b'(', b')') else {
+            continue;
+        };
+        let Some(body_open) = next_code_byte(bytes, parameter_close + 1, class_close, b'{') else {
+            continue;
+        };
+        let Some(body_close) = matching_delimiter(bytes, body_open, b'{', b'}') else {
+            continue;
+        };
+        let mut replacements = Vec::new();
+        let mut body_cursor = body_open + 1;
+        while body_cursor < body_close {
+            let Some((next, token)) = next_code_identifier(bytes, body_cursor, body_close) else {
+                break;
+            };
+            body_cursor = next;
+            if token == "const" || token == "let" {
+                replacements.push((next - token.len(), next));
+            }
+        }
+        for (start, end) in replacements.into_iter().rev() {
+            source.replace_range(start..end, "var");
+        }
+        return true;
+    }
+    false
+}
+
+fn class_method_ranges(source: &str) -> Vec<(usize, usize)> {
     let bytes = source.as_bytes();
     let mut ranges = Vec::new();
     let mut cursor = 0;
@@ -2013,22 +2079,19 @@ fn class_constructor_ranges(source: &str) -> Vec<(usize, usize)> {
             continue;
         }
         let Some(class_open) = next_code_byte(bytes, cursor, bytes.len(), b'{') else {
-            break;
+            continue;
         };
         let Some(class_close) = matching_delimiter(bytes, class_open, b'{', b'}') else {
-            break;
+            continue;
         };
         let mut body_cursor = class_open + 1;
         while body_cursor < class_close {
-            let Some((identifier_end, identifier)) =
+            let Some((identifier_end, _identifier)) =
                 next_code_identifier(bytes, body_cursor, class_close)
             else {
                 break;
             };
             body_cursor = identifier_end;
-            if identifier != "constructor" {
-                continue;
-            }
             let Some(parameter_open) = next_code_byte(bytes, body_cursor, class_close, b'(') else {
                 continue;
             };
@@ -2739,6 +2802,13 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_boa_audio_loader_method_lexicals() {
+        let source = "class Lb extends jc{constructor(e){super(e)}load(e,t){const n=this;const buffer=e.slice(0);Mb.getContext().decodeAudioData(buffer,t)}}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("load(e,t){var n=this;var buffer=e.slice(0);"));
+    }
+
+    #[test]
     fn injects_native_draco_decoder_and_skips_worker_preload() {
         let source = r#"/* DRACOLoader */ class DRACOLoader{preload() {
 
@@ -2928,12 +2998,25 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_boa_class_constructor_lexicals_only() {
+    fn normalizes_boa_class_method_lexicals_only() {
         let source = "/* GLTFLoader */ class Example{constructor(){const value=1;let other=2;this.value=value+other;}method(){const untouched=3;return untouched;}} let of='';";
         let normalized = normalize_three_compatibility_source(source);
         assert!(normalized.contains("constructor(){var value=1;var other=2;"));
-        assert!(normalized.contains("method(){const untouched=3;"));
+        assert!(normalized.contains("method(){var untouched=3;"));
         assert!(normalized.contains("var of='';"));
+    }
+
+    #[test]
+    fn executes_loader_style_derived_audio_constructor() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                "/* GLTFLoader */ class Loader{constructor(e){this.manager=e;}} class AudioLoader extends Loader{constructor(e){super(e)}}; new AudioLoader(1);",
+            )
+            .unwrap();
     }
 
     #[test]

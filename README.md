@@ -77,9 +77,9 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 [`tests/fixtures/threejs-gltf-loader-smoke`](tests/fixtures/threejs-gltf-loader-smoke/README.md)
 で再現できます。Three.jsの`GLTFLoader.loadAsync()`がembedded bufferから
 SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描画します。
-同fixtureでは、ネイティブ`AudioContext`とThree.jsの`AudioListener`/`Audio`を
-使ったWAVデコード経路も検証します。`AudioLoader`を含む全Three.js標準APIの互換性は
-まだ完了しておらず、未実装APIは段階的に追加します。
+同fixtureでは、公開`AudioLoader`、ネイティブ`AudioContext`、Three.jsの
+`AudioListener`/`Audio`を使ったWAVデコード経路も検証します。Three.js標準API全体の
+互換性はまだ完了しておらず、未実装APIは段階的に追加します。
 
 ## 構成
 

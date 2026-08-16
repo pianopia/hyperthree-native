@@ -3,6 +3,7 @@ import { WebGPURenderer } from "three/webgpu";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
+import { AudioLoader } from "three";
 
 const scene = new THREE.Scene();
 const environmentTexture = new THREE.DataTexture(
@@ -173,10 +174,8 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
   const loader = new GLTFLoader();
-  const audioContext = new AudioContext();
-  const audioLoad = fetch("public/generated/tone.wav")
-    .then((response) => response.arrayBuffer())
-    .then((buffer) => audioContext.decodeAudioData(buffer))
+  const audioLoader = new AudioLoader();
+  const audioLoad = audioLoader.loadAsync("public/generated/tone.wav")
     .then((audioBuffer) => {
       const listener = new THREE.AudioListener();
       const sound = new THREE.Audio(listener);
