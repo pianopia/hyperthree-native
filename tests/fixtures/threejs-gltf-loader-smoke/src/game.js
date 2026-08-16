@@ -1,9 +1,11 @@
 import * as THREE from "three";
-import { MeshPhysicalNodeMaterial, WebGPURenderer } from "three/webgpu";
+import { MeshPhysicalNodeMaterial, PostProcessing, WebGPURenderer } from "three/webgpu";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
+import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { AudioLoader } from "three";
+import { pass } from "three/tsl";
 
 const scene = new THREE.Scene();
 const environmentTexture = new THREE.DataTexture(
@@ -131,6 +133,7 @@ globalThis.__gltfShadowSmoke = false;
 globalThis.__gltfEnvironmentSmoke = false;
 globalThis.__gltfPhysicalPbrSmoke = false;
 globalThis.__gltfMorphSmoke = false;
+globalThis.__gltfPostProcessingSmoke = false;
 globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
@@ -622,6 +625,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   renderer.setRenderTarget(null);
   globalThis.__gltfMrtSmoke = mrt.isRenderTarget === true && mrt.texture.length === 2;
   await renderer.renderAsync(scene, camera);
+  const postProcessing = new PostProcessing(renderer);
+  const scenePass = pass(scene, camera);
+  const scenePassColor = scenePass.getTextureNode("output");
+  postProcessing.outputNode = scenePassColor.add(bloom(scenePassColor, 0.35, 0.25, 0.8));
+  await postProcessing.renderAsync();
+  globalThis.__gltfPostProcessingSmoke = postProcessing.outputNode !== null;
   globalThis.__gltfSmokeRendered = device !== null && renderer.isWebGPURenderer === true;
   const canvasContext = globalThis.__hyperthreeNativeCanvas.getContext('webgpu');
   const canvasConfiguration = canvasContext.configuration;
@@ -645,6 +654,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfPhysicalPbrSmoke ||
       !globalThis.__gltfMorphSmoke ||
+      !globalThis.__gltfPostProcessingSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
