@@ -5,8 +5,9 @@ native `drawAsset()` shortcut. It loads a project-relative glTF with an
 embedded buffer, an external-buffer glTF with an external PNG texture, and a
 GLB with an embedded PNG texture. It creates `SkinnedMesh`/`Skeleton` objects,
 advances an `AnimationMixer`, renders `InstancedMesh`/`Line`/`Sprite` objects,
-`BatchedMesh`, shadows, an equirectangular environment, and an MRT target, and
-exercises GPU buffer readback with `WebGPURenderer`.
+`BatchedMesh`, shadows, an equirectangular environment, an MRT target, and an
+indirect draw into an offscreen target whose pixels are read back with
+`WebGPURenderer`.
 
 From the repository root:
 

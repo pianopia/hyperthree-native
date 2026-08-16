@@ -20,7 +20,19 @@ pub struct NativeWebGpuContext {
     surface: Arc<wgpu::Surface<'static>>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
     presented_this_frame: AtomicBool,
+    device_events: Arc<DeviceEvents>,
     resources: Mutex<Resources>,
+}
+
+#[derive(Debug, Default)]
+struct DeviceEvents {
+    lost: Mutex<Option<DeviceLostEvent>>,
+}
+
+#[derive(Debug, Clone)]
+struct DeviceLostEvent {
+    reason: String,
+    message: String,
 }
 
 #[derive(Debug, Default)]
@@ -93,6 +105,16 @@ enum RecordedCommand {
         destination: u64,
         destination_mip_level: u32,
         destination_origin: [u32; 3],
+        size: [u32; 3],
+    },
+    CopyTextureToBuffer {
+        source: u64,
+        source_mip_level: u32,
+        source_origin: [u32; 3],
+        destination: u64,
+        destination_offset: u64,
+        bytes_per_row: u32,
+        rows_per_image: u32,
         size: [u32; 3],
     },
 }
@@ -224,12 +246,32 @@ impl NativeWebGpuContext {
         surface: Arc<wgpu::Surface<'static>>,
         surface_config: wgpu::SurfaceConfiguration,
     ) -> SharedNativeWebGpuContext {
+        let device_events = Arc::new(DeviceEvents::default());
+        let lost_events = Arc::clone(&device_events);
+        device.set_device_lost_callback(move |reason, message| {
+            let reason = match reason {
+                wgpu::DeviceLostReason::Destroyed => "destroyed",
+                wgpu::DeviceLostReason::Dropped => "dropped",
+                wgpu::DeviceLostReason::DeviceInvalid => "device-invalid",
+                wgpu::DeviceLostReason::ReplacedCallback => "replaced-callback",
+                wgpu::DeviceLostReason::Unknown => "unknown",
+            };
+            if let Ok(mut lost) = lost_events.lost.lock() {
+                if lost.is_none() {
+                    *lost = Some(DeviceLostEvent {
+                        reason: reason.to_string(),
+                        message,
+                    });
+                }
+            }
+        });
         Arc::new(Self {
             device,
             queue,
             surface,
             surface_config: Mutex::new(surface_config),
             presented_this_frame: AtomicBool::new(false),
+            device_events,
             resources: Mutex::new(Resources {
                 next_id: 1,
                 ..Resources::default()
@@ -253,6 +295,35 @@ impl NativeWebGpuContext {
         config.height = height;
         self.surface.configure(&self.device, &config);
         Ok(())
+    }
+
+    fn poll_device_lost(&self) -> Option<String> {
+        self.device.poll(wgpu::Maintain::Poll);
+        let lost = self.device_events.lost.lock().ok()?.clone()?;
+        serde_json::to_string(&serde_json::json!({
+            "reason": lost.reason,
+            "message": lost.message,
+        }))
+        .ok()
+    }
+
+    fn destroy_device(&self) {
+        self.device.destroy();
+    }
+
+    fn push_error_scope(&self, filter: &str) -> Result<(), String> {
+        let filter = match filter {
+            "out-of-memory" => wgpu::ErrorFilter::OutOfMemory,
+            "validation" => wgpu::ErrorFilter::Validation,
+            "internal" => wgpu::ErrorFilter::Internal,
+            other => return Err(format!("unsupported GPU error scope filter {other}")),
+        };
+        self.device.push_error_scope(filter);
+        Ok(())
+    }
+
+    fn pop_error_scope(&self) -> Option<String> {
+        pollster::block_on(self.device.pop_error_scope()).map(|error| error.to_string())
     }
 
     fn allocate_id(&self) -> Result<u64, String> {
@@ -1002,6 +1073,51 @@ impl NativeWebGpuContext {
                     ],
                 }
             }
+            "copyTextureToBuffer" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "copyTextureToBuffer payload must be an array".to_string())?;
+                let source = texture_copy_descriptor(values, 0)?;
+                let destination = values
+                    .get(1)
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| "texture buffer destination must be an object".to_string())?;
+                let size = values
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| "copy size must be an array".to_string())?;
+                RecordedCommand::CopyTextureToBuffer {
+                    source: source.0,
+                    source_mip_level: source.1,
+                    source_origin: source.2,
+                    destination: destination
+                        .get("buffer")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            "texture buffer destination has no buffer handle".to_string()
+                        })?,
+                    destination_offset: destination
+                        .get("offset")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    bytes_per_row: destination
+                        .get("bytesPerRow")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            "texture buffer destination has no bytesPerRow".to_string()
+                        })? as u32,
+                    rows_per_image: destination
+                        .get("rowsPerImage")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(value_u32_or(size, 1, 1)? as u64)
+                        as u32,
+                    size: [
+                        value_u32(size, 0)?,
+                        value_u32_or(size, 1, 1)?,
+                        value_u32_or(size, 2, 1)?,
+                    ],
+                }
+            }
             _ => return Err(format!("unsupported WebGPU encoder command {operation}")),
         };
         let mut resources = self
@@ -1283,6 +1399,47 @@ impl NativeWebGpuContext {
                         },
                     );
                 }
+                RecordedCommand::CopyTextureToBuffer {
+                    source,
+                    source_mip_level,
+                    source_origin,
+                    destination,
+                    destination_offset,
+                    bytes_per_row,
+                    rows_per_image,
+                    size,
+                } => {
+                    let source_texture = texture_resource(&resources, source)?;
+                    let destination_buffer =
+                        resources.buffers.get(&destination).ok_or_else(|| {
+                            format!("unknown destination GPUBuffer handle {destination}")
+                        })?;
+                    encoder.copy_texture_to_buffer(
+                        wgpu::ImageCopyTexture {
+                            texture: source_texture,
+                            mip_level: source_mip_level,
+                            origin: wgpu::Origin3d {
+                                x: source_origin[0],
+                                y: source_origin[1],
+                                z: source_origin[2],
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::ImageCopyBuffer {
+                            buffer: destination_buffer,
+                            layout: wgpu::ImageDataLayout {
+                                offset: destination_offset,
+                                bytes_per_row: Some(bytes_per_row),
+                                rows_per_image: Some(rows_per_image),
+                            },
+                        },
+                        wgpu::Extent3d {
+                            width: size[0],
+                            height: size[1],
+                            depth_or_array_layers: size[2],
+                        },
+                    );
+                }
             }
         }
         let command_buffer = encoder.finish();
@@ -1549,6 +1706,57 @@ pub fn register_bindings(
         "__hyperthreeWebGpuConfigureCanvas",
         0,
         |_this, _args, _context| Ok(JsValue::undefined()),
+    )?;
+
+    let poll_device_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuPollDeviceLost",
+        0,
+        move |_this, _args, _context| {
+            Ok(poll_device_gpu
+                .poll_device_lost()
+                .map(|event| JsValue::from(js_string!(event)))
+                .unwrap_or_else(JsValue::null))
+        },
+    )?;
+
+    let destroy_device_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDestroyDevice",
+        0,
+        move |_this, _args, _context| {
+            destroy_device_gpu.destroy_device();
+            Ok(JsValue::undefined())
+        },
+    )?;
+
+    let push_error_scope_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuPushErrorScope",
+        1,
+        move |_this, args, context| {
+            let filter = string_arg(args, 0, context)?;
+            push_error_scope_gpu
+                .push_error_scope(&filter)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
+    let pop_error_scope_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuPopErrorScope",
+        0,
+        move |_this, _args, _context| {
+            Ok(pop_error_scope_gpu
+                .pop_error_scope()
+                .map(|error| JsValue::from(js_string!(error)))
+                .unwrap_or_else(JsValue::null))
+        },
     )?;
 
     let sampler_gpu = gpu.clone();
@@ -3094,6 +3302,14 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     } : null,
   });
   const makeDevice = () => {
+    let resolveLost;
+    const lost = new Promise(resolve => { resolveLost = resolve; });
+    const pollLost = () => {
+      const event = __hyperthreeWebGpuPollDeviceLost();
+      if (event !== null) resolveLost(JSON.parse(event));
+      else requestAnimationFrame(pollLost);
+    };
+    requestAnimationFrame(pollLost);
     const queue = {
       writeBuffer(buffer, offset, data) {
         const bytes = new Uint8Array(data.buffer, data.byteOffset ?? 0, data.byteLength ?? data.length);
@@ -3219,21 +3435,36 @@ const WEBGPU_BOOTSTRAP: &str = r#"
               normalizeCopy(source), normalizeCopy(destination), normalizedSize,
             ]));
           },
+          copyTextureToBuffer(source, destination, size) {
+            const normalizeSource = value => ({
+              texture: handleId(value.texture),
+              mipLevel: value.mipLevel ?? 0,
+              origin: Array.isArray(value.origin) ? value.origin : [value.origin?.x ?? 0, value.origin?.y ?? 0, value.origin?.z ?? 0],
+            });
+            const normalizedSize = Array.isArray(size) ? size : [size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1];
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'copyTextureToBuffer', JSON.stringify([
+              normalizeSource(source),
+              {
+                buffer: handleId(destination.buffer),
+                offset: destination.offset ?? 0,
+                bytesPerRow: destination.bytesPerRow,
+                rowsPerImage: destination.rowsPerImage ?? normalizedSize[1],
+              },
+              normalizedSize,
+            ]));
+          },
           finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },
         });
       },
       pushErrorScope(filter) {
-        if (!this.__hyperthreeErrorScopes) this.__hyperthreeErrorScopes = [];
-        this.__hyperthreeErrorScopes.push(filter);
+        __hyperthreeWebGpuPushErrorScope(filter);
       },
       async popErrorScope() {
-        if (this.__hyperthreeErrorScopes) this.__hyperthreeErrorScopes.pop();
-        return null;
+        const error = __hyperthreeWebGpuPopErrorScope();
+        return error === null ? null : { message: error };
       },
-      // The promise remains pending until the native host reports a real
-      // device-loss event. Resolving it during initialization makes Three.js
-      // treat every healthy device as lost.
-      lost: new Promise(() => {}),
+      lost,
+      destroy: () => __hyperthreeWebGpuDestroyDevice(),
     };
     return device;
   };

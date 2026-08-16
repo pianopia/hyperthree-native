@@ -81,8 +81,9 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 `MeshStandardNodeMaterial`、TSL `colorNode`、
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
-shadow、equirectangular environment、MRTも同じfixtureでスモーク済みである。indirect drawの
-ネイティブコマンドバインディングは実装済みだが、標準Three.js fixtureでの検証は未完了である。
+shadow、equirectangular environment、MRT、indirect drawとそのGPU readbackも同じfixtureで
+スモーク済みである。`GPUDevice.lost`はnative wgpu device-lost callbackからreason/messageを
+Promiseへ配送し、error scopeはnative `push_error_scope`/`pop_error_scope`へ接続した。
 constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はdevice-lost／
 present lifecycle、KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
@@ -118,7 +119,7 @@ Three.js公式のWebGPUサンプルを次のカテゴリで実行する。
 2. GLTFLoader、AnimationMixer、skin、morph target（embedded/external/GLBとPNG textureのsmoke済み）
 3. InstancedMesh、BatchedMesh、Points、Line、Sprite（InstancedMesh/Line/Sprite smoke済み）
 4. TSL/NodeMaterial、compute、post-processing（TSL/compute/post-processing smoke済み）
-5. Shadow、environment map、multiple render target（fixture smoke済み）、indirect draw（未完了）
+5. Shadow、environment map、multiple render target、indirect draw（fixture smoke済み）
 
 各カテゴリにブラウザ版との画像比較、GPU validation、メモリ使用量、フレーム時間
 のテストを用意し、未対応APIをゲーム起動後に黙って簡略化しない。未対応の場合は

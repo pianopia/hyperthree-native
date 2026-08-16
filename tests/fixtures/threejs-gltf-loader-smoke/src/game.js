@@ -79,6 +79,7 @@ globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
 globalThis.__gltfEnvironmentSmoke = false;
 globalThis.__gltfMrtSmoke = false;
+globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -102,6 +103,50 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   readbackBuffer.unmap();
   sourceBuffer.destroy();
   readbackBuffer.destroy();
+  const indirectTarget = device.createTexture({
+    size: { width: 4, height: 4 },
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const indirectReadback = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const indirectArgs = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT });
+  device.queue.writeBuffer(indirectArgs, 0, new Uint32Array([3, 1, 0, 0]));
+  const indirectShader = device.createShaderModule({ code: `
+    @vertex fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+      var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+      return vec4f(positions[index], 0.0, 1.0);
+    }
+    @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }
+  ` });
+  const indirectPipeline = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: indirectShader, entryPoint: "vs_main", buffers: [] },
+    fragment: { module: indirectShader, entryPoint: "fs_main", targets: [{ format: "rgba8unorm" }] },
+    primitive: { topology: "triangle-list" },
+  });
+  const indirectEncoder = device.createCommandEncoder();
+  const indirectPass = indirectEncoder.beginRenderPass({ colorAttachments: [{
+    view: indirectTarget.createView(),
+    loadOp: "clear",
+    storeOp: "store",
+    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+  }] });
+  indirectPass.setPipeline(indirectPipeline);
+  indirectPass.drawIndirect(indirectArgs, 0);
+  indirectPass.end();
+  indirectEncoder.copyTextureToBuffer(
+    { texture: indirectTarget },
+    { buffer: indirectReadback, bytesPerRow: 256, rowsPerImage: 4 },
+    { width: 4, height: 4, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([indirectEncoder.finish()]);
+  await indirectReadback.mapAsync(GPUMapMode.READ);
+  const indirectBytes = new Uint8Array(indirectReadback.getMappedRange());
+  globalThis.__gltfIndirectSmoke = indirectBytes[0] === 255 && indirectBytes[1] === 0 && indirectBytes[2] === 0 && indirectBytes[3] === 255;
+  indirectReadback.unmap();
+  indirectArgs.destroy();
+  indirectReadback.destroy();
+  indirectTarget.destroy();
   device.pushErrorScope("validation");
   const errorScope = await device.popErrorScope();
   const temporaryTexture = device.createTexture({ size: { width: 1, height: 1 }, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
@@ -159,7 +204,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
-      !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {
+      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }
 }).catch((error) => {

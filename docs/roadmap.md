@@ -35,9 +35,9 @@
 - [x] Three.js 0.179 MeshStandardNodeMaterial, TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal
 - [x] Three.js 0.179 GLTFLoader embedded-buffer SkinnedMesh/Skeleton/AnimationMixer/WebGPU fixture
 - [x] Three.js 0.179 GLTFLoader GLB, external-buffer, external-PNG texture, and canvas-resize fixture
-- [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, and MRT fixture
+- [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
-- [x] WebGPU texture/sampler destroy and error-scope lifecycle fixture
+- [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
