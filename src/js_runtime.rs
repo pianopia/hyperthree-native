@@ -2648,15 +2648,17 @@ fn inject_minified_draco_decode_hook(source: &mut String) -> bool {
 
         let buffer = parameters[0];
         let callback = parameters[1];
+        let attribute_ids = parameters.get(2).copied().unwrap_or("undefined");
         let attribute_types = parameters.get(3).copied().unwrap_or("undefined");
         let vertex_color_space = parameters.get(4).copied().unwrap_or("undefined");
         let on_error = parameters.get(5).copied().unwrap_or("undefined");
         let mut hook = String::from(
-            "if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const __htDracoResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(__HT_BUFFER__));const __htRequestedTypes=__HT_ATTRIBUTE_TYPES||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htDracoResult.attributes){const __htTypeName=__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htNativeAttribute.name,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:__HT_VERTEX_COLOR_SPACE});}const __htGeometry=this._createGeometry({index:{array:new Uint32Array(__htDracoResult.index)},attributes:__htAttributes});return Promise.resolve(__htGeometry).then(__HT_CALLBACK).catch(__HT_ON_ERROR);}catch(__htError){return Promise.reject(__htError).catch(__HT_ON_ERROR);}}",
+            "if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const __htDracoResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(__HT_BUFFER__));const __htRequestedIDs=__HT_ATTRIBUTE_IDS||this.defaultAttributeIDs;const __htRequestedTypes=__HT_ATTRIBUTE_TYPES||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htDracoResult.attributes){let __htAttributeName=__htNativeAttribute.name;for(const __htRequestedName in __htRequestedIDs){if(typeof __htRequestedIDs[__htRequestedName]==='number'&&__htRequestedIDs[__htRequestedName]===__htNativeAttribute.attributeId){__htAttributeName=__htRequestedName;break;}}const __htTypeName=__htRequestedTypes[__htAttributeName]||__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htAttributeName,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:__HT_VERTEX_COLOR_SPACE});}const __htGeometry=this._createGeometry({index:__htDracoResult.pointCloud?null:{array:new Uint32Array(__htDracoResult.index)},attributes:__htAttributes});return Promise.resolve(__htGeometry).then(__HT_CALLBACK).catch(__HT_ON_ERROR);}catch(__htError){return Promise.reject(__htError).catch(__HT_ON_ERROR);}}",
         );
         for (placeholder, value) in [
             ("__HT_BUFFER__", buffer),
             ("__HT_CALLBACK", callback),
+            ("__HT_ATTRIBUTE_IDS", attribute_ids),
             ("__HT_ATTRIBUTE_TYPES", attribute_types),
             ("__HT_VERTEX_COLOR_SPACE", vertex_color_space),
             ("__HT_ON_ERROR", on_error),
@@ -3846,6 +3848,15 @@ mod tests {
         assert!(normalized
             .contains("if(globalThis.__hyperthreeNativeDracoAvailable===true)return this;"));
         assert!(normalized.contains("__hyperthreeDracoNativeCalls"));
+    }
+
+    #[test]
+    fn minified_draco_hook_preserves_unique_attribute_names_and_point_cloud_shape() {
+        let source = "/* DRACOLoader */ class DRACOLoader{decodeDracoFile(e,t,s,i,n=at,r=()=>{}){return this.decodeGeometry(e,{})}}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("__hyperthreeDecodeDraco"));
+        assert!(normalized.contains("attributeId"));
+        assert!(normalized.contains("o.pointCloud?null"));
     }
 
     #[test]
