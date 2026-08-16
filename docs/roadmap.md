@@ -45,7 +45,9 @@
 - [x] Three.js WebGPU compressed texture format negotiation and mip-level uploads
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
 - [x] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
-- [ ] KTX2/Basis native transcode and GPU texture upload
+- [x] Standard KTX2Loader raw BC1 path through KHR_texture_basisu and native GPU upload
+- [x] Native BasisLZ/UASTC transcoder binding with KTX2Loader bridge and compressed/uncompressed target selection
+- [ ] UASTC KTX2 end-to-end fixture across supported GPU target formats
 - [ ] DRACO native decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms

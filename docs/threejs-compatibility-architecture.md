@@ -90,7 +90,7 @@ JS sessionを再生成してentry pointを再実行するところまで検証�
 は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はpresent lifecycle、
-KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
+DRACO、texture readback、未実装の標準WebGPU APIを
 段階的に埋める。
 
 ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、
@@ -99,13 +99,20 @@ EXPONENTIALフィルタを含む圧縮・復元ラウンドトリップをテス
 使わない資産は従来のgltf-rs readerへフォールバックするため、sparse accessorなどの
 既存挙動を不用意に狭めない。なお、これはネイティブAssetStore経路の対応であり、
 Three.js側の`GLTFLoader`へnative MeshoptDecoderを自動注入し、属性・三角形インデックスの
-圧縮glTFを標準`loadAsync()`で読み込むfixtureまで検証済みである。DRACO、KTX2/Basisは未完了である。
+圧縮glTFを標準`loadAsync()`で読み込むfixtureまで検証済みである。さらに標準
+`KTX2Loader`を`GLTFLoader.setKTX2Loader()`へ接続し、`KHR_texture_basisu`のraw BC1 KTX2を
+GPU圧縮テクスチャとして読み込むfixtureも検証済みである。さらにnative `basisu` transcoderを
+`KTX2Loader`のworker境界へ差し込み、BasisLZ/UASTCをASTC/BC7/BC3/BC1/ETC2/RGBA32へ
+実行時選択できるようにした。BasisLZの8×8実ファイルfixtureは標準GLTFLoader経由で検証済みで、
+UASTCのGPUターゲット別fixtureとDRACOは未完了である。
 
 WebGPU側は、実GPUが提供するBC/ETC2/ASTC圧縮機能を`GPUAdapter.features`/`GPUDevice.features`
 へ公開し、Three.jsの圧縮テクスチャ経路が使う形式名をwgpuへ変換する。`queue.writeTexture()`
-は圧縮ブロックのbytesPerRowとmipLevelを保持してネイティブへ渡す。これによりKTX2の
-非Basis raw mipデータを受ける土台はできたが、BasisLZ/UASTCのKTX2コンテナを自動transcode
-する処理とfixtureは次段階である。
+は圧縮ブロックのbytesPerRowとmipLevelを保持してネイティブへ渡す。raw KTX2は標準
+KTX2Loaderが解析し、`CompressedTexture`のBC1データをネイティブGPUへ渡せる。
+BasisLZ/UASTCのKTX2コンテナはnative transcoderが全mip/face/layerを展開し、
+worker互換の`faces[].mipmaps[]`としてThree.jsへ返す。BasisLZの実ファイルfixtureは検証済みで、
+UASTCのGPUターゲット選択fixtureは次段階である。
 
 ### Phase B: Three.js renderer実行
 

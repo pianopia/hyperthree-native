@@ -4,12 +4,13 @@ use crate::{
     webgpu::SharedNativeWebGpuContext,
 };
 use anyhow::{Context as _, Result};
+use basisu::{DecodeFlags, SourceFormat, TargetFormat, Transcoder};
 use boa_engine::{
     builtins::promise::PromiseState,
     js_string,
     module::{Module, ModuleLoader, Referrer},
     object::{
-        builtins::{AlignedVec, JsArrayBuffer},
+        builtins::{AlignedVec, JsArray, JsArrayBuffer},
         JsObject,
     },
     Context, JsArgs, JsError, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Source,
@@ -833,6 +834,129 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to register meshopt binding: {error}"))?;
 
         context
+            .register_global_builtin_callable(js_string!("__hyperthreeTranscodeKtx2"), 2, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = byte_array_value(args.get_or_undefined(0), context)?;
+
+                    // A non-zero vkFormat identifies a KTX2 file whose payload is
+                    // already GPU-ready. Leave those files to KTX2Loader's raw path.
+                    if source.len() < 16
+                        || u32::from_le_bytes([source[12], source[13], source[14], source[15]]) != 0
+                    {
+                        return Ok(JsValue::null());
+                    }
+
+                    let transcoder = Transcoder::new(&source).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to open Basis/KTX2 texture: {error:?}"))
+                    })?;
+                    let config = args.get_or_undefined(1);
+                    let has_alpha = transcoder.has_alpha();
+                    let (target, format, type_name) = choose_basis_target(
+                        &transcoder,
+                        has_alpha,
+                        js_bool_property(config, "astcSupported", context)?,
+                        js_bool_property(config, "bptcSupported", context)?,
+                        js_bool_property(config, "dxtSupported", context)?,
+                        js_bool_property(config, "etc2Supported", context)?,
+                    )
+                    .map_err(|error| JsNativeError::error().with_message(error))?;
+                    let (width, height) = transcoder.base_dimensions();
+                    let level_count = transcoder.level_count();
+                    let layer_count = transcoder.layer_count().max(1);
+                    let face_count = transcoder.face_count().max(1);
+
+                    let mut faces = Vec::with_capacity(face_count as usize);
+                    for face in 0..face_count {
+                        let mut mipmaps = Vec::with_capacity(level_count as usize);
+                        for level in 0..level_count {
+                            let info = transcoder.image_level_info(level).map_err(|error| {
+                                JsNativeError::error().with_message(format!(
+                                    "failed to inspect Basis/KTX2 mip level {level}: {error:?}"
+                                ))
+                            })?;
+                            let mut mip_bytes = Vec::new();
+                            for layer in 0..layer_count {
+                                let bytes = transcoder
+                                    .transcode_image(
+                                        level,
+                                        layer,
+                                        face,
+                                        target,
+                                        DecodeFlags::NONE,
+                                    )
+                                    .map_err(|error| {
+                                        JsNativeError::error().with_message(format!(
+                                            "failed to transcode Basis/KTX2 level {level}, layer {layer}, face {face} to {target:?}: {error:?}"
+                                        ))
+                                    })?;
+                                mip_bytes.extend_from_slice(&bytes);
+                            }
+                            let block = AlignedVec::from_iter(0, mip_bytes);
+                            let buffer = JsArrayBuffer::from_byte_block(block, context).map_err(
+                                |error| {
+                                    JsNativeError::error().with_message(format!(
+                                        "failed to create transcoded KTX2 buffer: {error}"
+                                    ))
+                                },
+                            )?;
+                            let mipmap = JsObject::with_object_proto(context.intrinsics());
+                            mipmap.set(js_string!("data"), buffer, false, context)?;
+                            mipmap.set(
+                                js_string!("width"),
+                                JsValue::from(info.width as f64),
+                                false,
+                                context,
+                            )?;
+                            mipmap.set(
+                                js_string!("height"),
+                                JsValue::from(info.height as f64),
+                                false,
+                                context,
+                            )?;
+                            mipmaps.push(mipmap.into());
+                        }
+                        let face_value = JsObject::with_object_proto(context.intrinsics());
+                        face_value.set(
+                            js_string!("mipmaps"),
+                            JsArray::from_iter(mipmaps, context),
+                            false,
+                            context,
+                        )?;
+                        faces.push(face_value.into());
+                    }
+
+                    let data = JsObject::with_object_proto(context.intrinsics());
+                    data.set(
+                        js_string!("faces"),
+                        JsArray::from_iter(faces, context),
+                        false,
+                        context,
+                    )?;
+                    data.set(
+                        js_string!("width"),
+                        JsValue::from(width as f64),
+                        false,
+                        context,
+                    )?;
+                    data.set(
+                        js_string!("height"),
+                        JsValue::from(height as f64),
+                        false,
+                        context,
+                    )?;
+                    data.set(js_string!("format"), js_string!(format), false, context)?;
+                    data.set(js_string!("type"), js_string!(type_name), false, context)?;
+                    data.set(js_string!("dfdFlags"), JsValue::from(0), false, context)?;
+                    let result = JsObject::with_object_proto(context.intrinsics());
+                    result.set(js_string!("type"), js_string!("transcode"), false, context)?;
+                    result.set(js_string!("data"), data, false, context)?;
+                    Ok(result.into())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register KTX2 transcoder binding: {error}"))?;
+
+        context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeImage"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = args.get_or_undefined(0).to_object(context).map_err(|_| {
@@ -1105,6 +1229,8 @@ impl JsRuntime {
                     target.set(decoded);
                   },
                 };
+                globalThis.__hyperthreeKtx2NativeCalls = globalThis.__hyperthreeKtx2NativeCalls || 0;
+                globalThis.__hyperthreeKtx2Transcode = globalThis.__hyperthreeKtx2Transcode || ((buffer, config) => { globalThis.__hyperthreeKtx2NativeCalls += 1; const nativeConfig = Object.assign({}, config || {}); nativeConfig.bptcSupported = nativeConfig.bptcSupported || nativeConfig.dxtSupported; return Promise.resolve(__hyperthreeTranscodeKtx2(buffer, nativeConfig)); });
                 const decodeDataUrl = (url) => {
                   const comma = url.indexOf(',');
                   if (comma < 0) throw new TypeError(`invalid data URL: ${url}`);
@@ -1277,11 +1403,14 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         source.to_string()
     };
 
-    let is_three_loader_bundle =
+    let is_gltf_loader_bundle =
         source.contains("GLTFLoader") || source.contains("THREE.GLTFLoader");
+    let is_ktx2_loader_bundle = source.contains("KTX2Loader");
     let mut boa_changed = false;
-    if is_three_loader_bundle {
+    if is_gltf_loader_bundle || is_ktx2_loader_bundle {
         boa_changed = normalize_boa_class_constructor_bindings(&mut normalized);
+    }
+    if is_gltf_loader_bundle {
         if normalized.contains("let of=") {
             normalized = normalized.replace("let of=", "var of=");
             boa_changed = true;
@@ -1306,7 +1435,24 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
             }
         }
     }
-    if (is_three_loader_bundle && boa_changed) || normalized != source {
+    if is_ktx2_loader_bundle {
+        for (from, to) in [
+            (
+                "const container = read( new Uint8Array( buffer ) );",
+                "const container = read( new Uint8Array( buffer ) );\n\n\t\tif ( globalThis.__hyperthreeKtx2Transcode ) {\n\n\t\t\tconst nativeResult = await globalThis.__hyperthreeKtx2Transcode( new Uint8Array( buffer ), this.workerConfig || {} );\n\n\t\t\tif ( nativeResult ) {\n\n\t\t\t\tnativeResult.data.format = KTX2Loader.EngineFormat[ nativeResult.data.format ];\n\t\t\t\tnativeResult.data.type = KTX2Loader.EngineType[ nativeResult.data.type ];\n\t\t\t\treturn this._createTextureFrom( nativeResult, container );\n\n\t\t\t}\n\n\t\t}"
+            ),
+            (
+                "const container=read(new Uint8Array(buffer));",
+                "const container=read(new Uint8Array(buffer));if(globalThis.__hyperthreeKtx2Transcode){const nativeResult=await globalThis.__hyperthreeKtx2Transcode(new Uint8Array(buffer),this.workerConfig||{});if(nativeResult){nativeResult.data.format=KTX2Loader.EngineFormat[nativeResult.data.format];nativeResult.data.type=KTX2Loader.EngineType[nativeResult.data.type];return this._createTextureFrom(nativeResult,container);}}"
+            ),
+        ] {
+            if normalized.contains(from) {
+                normalized = normalized.replace(from, to);
+                boa_changed = true;
+            }
+        }
+    }
+    if boa_changed || normalized != source {
         std::borrow::Cow::Owned(normalized)
     } else {
         std::borrow::Cow::Borrowed(source)
@@ -1809,6 +1955,92 @@ fn byte_array_value(value: &JsValue, context: &mut Context) -> JsResult<Vec<u8>>
     Ok(bytes)
 }
 
+fn js_bool_property(value: &JsValue, property: &str, context: &mut Context) -> JsResult<bool> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(false);
+    }
+    let object = value.to_object(context).map_err(|_| {
+        JsNativeError::typ().with_message("KTX2Loader worker config must be an object")
+    })?;
+    Ok(object.get(js_string!(property), context)?.to_boolean())
+}
+
+fn choose_basis_target(
+    transcoder: &Transcoder<'_>,
+    has_alpha: bool,
+    astc_supported: bool,
+    bptc_supported: bool,
+    dxt_supported: bool,
+    etc2_supported: bool,
+) -> std::result::Result<(TargetFormat, &'static str, &'static str), String> {
+    let is_hdr = matches!(
+        transcoder.source_format(),
+        SourceFormat::UastcHdr4x4 | SourceFormat::AstcHdr6x6 | SourceFormat::UastcHdr6x6
+    );
+    let candidates = if is_hdr {
+        let mut candidates = Vec::new();
+        if bptc_supported {
+            candidates.push((
+                TargetFormat::Bc6h,
+                "RGB_BPTC_UNSIGNED_Format",
+                "HalfFloatType",
+            ));
+        }
+        candidates.push((TargetFormat::RgbaHalf, "RGBAFormat", "HalfFloatType"));
+        candidates
+    } else {
+        let mut candidates = Vec::new();
+        if astc_supported {
+            candidates.push((
+                TargetFormat::Astc4x4Rgba,
+                "RGBA_ASTC_4x4_Format",
+                "UnsignedByteType",
+            ));
+        }
+        if bptc_supported {
+            candidates.push((
+                TargetFormat::Bc7Rgba,
+                "RGBA_BPTC_Format",
+                "UnsignedByteType",
+            ));
+        }
+        if dxt_supported {
+            candidates.push(if has_alpha {
+                (
+                    TargetFormat::Bc3Rgba,
+                    "RGBA_S3TC_DXT5_Format",
+                    "UnsignedByteType",
+                )
+            } else {
+                (
+                    TargetFormat::Bc1Rgb,
+                    "RGBA_S3TC_DXT1_Format",
+                    "UnsignedByteType",
+                )
+            });
+        }
+        if etc2_supported {
+            candidates.push((
+                TargetFormat::Etc2Rgba,
+                "RGBA_ETC2_EAC_Format",
+                "UnsignedByteType",
+            ));
+        }
+        candidates.push((TargetFormat::Rgba32, "RGBAFormat", "UnsignedByteType"));
+        candidates
+    };
+
+    candidates
+        .into_iter()
+        .find(|(target, _, _)| transcoder.supports(*target))
+        .ok_or_else(|| {
+            format!(
+                "Basis/KTX2 texture source {:?} has no supported native transcode target",
+                transcoder.source_format()
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_three_compatibility_source, JsRuntime};
@@ -1858,6 +2090,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn injects_native_ktx2_transcoder_into_ktx2_loader() {
+        let source = "/* KTX2Loader */ class KTX2Loader{async _createTexture(buffer){const container = read( new Uint8Array( buffer ) ); return container;}}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("__hyperthreeKtx2Transcode"));
+        assert!(normalized.contains("new Uint8Array( buffer )"));
+        assert!(normalized.contains("KTX2Loader.EngineFormat"));
+    }
+
     #[cfg(any())]
     #[test]
     fn native_meshopt_binding_decodes_a_typed_array() {
@@ -1893,6 +2134,38 @@ mod tests {
             .unwrap();
         runtime
             .execute_source("if (globalThis.__meshoptProbe !== true) throw new Error('meshopt binding probe failed');")
+            .unwrap();
+    }
+
+    #[test]
+    fn native_basis_ktx2_binding_selects_rgba32_and_bc7() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__basisProbe = false;
+                fetch('data:application/octet-stream;base64,q0tUWCAyMLsNChoKAAAAAAEAAAAIAAAACAAAAAAAAAAAAAAAAQAAAAEAAAABAAAAaAAAADwAAACkAAAARAAAAOgAAAAAAAAAjAAAAAAAAAB0AQAAAAAAAAMAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAIAOACjAQIAAwMAAAgIAAAAAAAAAAA/AAAAAAAAAAAA/////0AAPw8AAAAAAAAAAP////9AAAAAS1RYd3JpdGVyAGt0eCBjcmVhdGUgdjUuMC5fX2RlZmF1bHRfXyAvIGxpYmt4IHY1LjAuX19kZWZhdWx0X18AAQIAAgAtAAAACQAAAC4AAAAAAAAAAAAAAAAAAAABAAAAAQAAAAIAAAABwAQAAAAAAAACBJgbIAAAAAjDNpE+kQBgAgAAAAAAAIEATAEQAAAAACBZwD2sqqqqUlVVVQUUwEQAAAAAAAASQQCYAAAAAAAAQBgCogQMAAAAg3Z7SQSiIABMAAgAAAAAIAIBBkwO')
+                  .then((response) => response.arrayBuffer())
+                  .then((buffer) => {
+                    const result = __hyperthreeTranscodeKtx2(new Uint8Array(buffer), {});
+                    const mipmap = result.data.faces[0].mipmaps[0];
+                    const compressed = __hyperthreeTranscodeKtx2(new Uint8Array(buffer), { bptcSupported: true });
+                    const compressedMipmap = compressed.data.faces[0].mipmaps[0];
+                    globalThis.__basisProbe = result.type === 'transcode' &&
+                      result.data.format === 'RGBAFormat' &&
+                      mipmap.width === 8 && mipmap.height === 8 &&
+                      mipmap.data.byteLength === 256 &&
+                      compressed.data.format === 'RGBA_BPTC_Format' &&
+                      compressedMipmap.data.byteLength === 64;
+                  });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source("if (globalThis.__basisProbe !== true) throw new Error('Basis KTX2 binding probe failed');")
             .unwrap();
     }
 

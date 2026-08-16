@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { WebGPURenderer } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 
 const scene = new THREE.Scene();
 const environmentTexture = new THREE.DataTexture(
@@ -75,6 +76,9 @@ globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfMeshoptLoaded = false;
+globalThis.__gltfKtx2Loaded = false;
+globalThis.__gltfKtx2NativeHook = false;
+globalThis.__gltfBasisKtx2Loaded = false;
 globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
@@ -159,15 +163,20 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const renderer = new WebGPURenderer({ canvas: globalThis.__hyperthreeNativeCanvas, antialias: false });
   globalThis.__gltfSmokeStage = "before-renderer-init";
   await renderer.init();
+  const ktx2Loader = new KTX2Loader();
+  ktx2Loader.detectSupport(renderer);
   renderer.setSize(640, 360, false);
   renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
   const loader = new GLTFLoader();
-  const [gltf, externalGltf, glb, meshoptGltf] = await Promise.all([
+  loader.setKTX2Loader(ktx2Loader);
+  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf] = await Promise.all([
     loader.loadAsync("public/scene.gltf"),
     loader.loadAsync("public/generated/scene-external.gltf"),
     loader.loadAsync("public/generated/scene.glb"),
     loader.loadAsync("public/generated/scene-meshopt.gltf"),
+    loader.loadAsync("public/generated/scene-ktx2.gltf"),
+    loader.loadAsync("public/generated/scene-ktx2-basis.gltf"),
   ]);
   globalThis.__gltfSmokeStage = "after-gltf-load";
   const skinned = gltf.scene.getObjectByProperty("isSkinnedMesh", true);
@@ -190,11 +199,26 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     meshoptMesh?.geometry?.attributes?.position?.count === 3 &&
     meshoptMesh.geometry.index?.count === 3,
   );
+  const ktx2Textured = ktx2Gltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfKtx2Loaded = Boolean(
+    ktx2Textured?.material?.map?.isCompressedTexture === true &&
+    ktx2Textured.material.map.image?.width === 4 &&
+    ktx2Textured.material.map.image?.height === 4,
+  );
+  globalThis.__gltfKtx2NativeHook = globalThis.__hyperthreeKtx2NativeCalls > 0;
+  const basisKtx2Textured = basisKtx2Gltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfBasisKtx2Loaded = Boolean(
+    basisKtx2Textured?.material?.map?.isCompressedTexture === true &&
+    basisKtx2Textured.material.map.image?.width > 0 &&
+    basisKtx2Textured.material.map.image?.height > 0,
+  );
   if (!globalThis.__gltfExternalTexture) throw new Error("external glTF image texture did not decode");
   if (!globalThis.__gltfGlbLoaded) throw new Error("GLB container did not load through GLTFLoader");
   scene.add(gltf.scene);
   scene.add(externalGltf.scene);
   scene.add(glb.scene);
+  scene.add(ktx2Gltf.scene);
+  scene.add(basisKtx2Gltf.scene);
   globalThis.__gltfEnvironmentSmoke = scene.environment === environmentTexture;
   globalThis.__gltfSmokeStage = "before-render";
   const mrt = new THREE.RenderTarget(64, 64, { count: 2, depthBuffer: true });
@@ -208,7 +232,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

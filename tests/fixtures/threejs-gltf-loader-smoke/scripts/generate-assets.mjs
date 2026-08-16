@@ -36,6 +36,61 @@ const png = Buffer.from(
   "base64",
 );
 
+const basisLzKtx2 = Buffer.from(
+  "q0tUWCAyMLsNChoKAAAAAAEAAAAIAAAACAAAAAAAAAAAAAAAAQAAAAEAAAABAAAAaAAAADwAAACkAAAARAAAAOgAAAAAAAAAjAAAAAAAAAB0AQAAAAAAAAMAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAIAOACjAQIAAwMAAAgIAAAAAAAAAAA/AAAAAAAAAAAA/////0AAPw8AAAAAAAAAAP////9AAAAAS1RYd3JpdGVyAGt0eCBjcmVhdGUgdjUuMC5fX2RlZmF1bHRfXyAvIGxpYmt4IHY1LjAuX19kZWZhdWx0X18AAQIAAgAtAAAACQAAAC4AAAAAAAAAAAAAAAAAAAABAAAAAQAAAAIAAAABwAQAAAAAAAACBJgbIAAAAAjDNpE+kQBgAgAAAAAAAIEATAEQAAAAACBZwD2sqqqqUlVVVQUUwEQAAAAAAAASQQCYAAAAAAAAQBgCogQMAAAAg3Z7SQSiIABMAAgAAAAAIAIBBkwO",
+  "base64",
+);
+
+const makeKtx2Bc1 = () => {
+  const width = 4;
+  const height = 4;
+  const levelData = Buffer.from([0x00, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  const dfdBlockLength = 8 + 16 + 16;
+  const dfdLength = 4 + dfdBlockLength;
+  const levelDataOffset = 80 + 24 + dfdLength;
+  const output = Buffer.alloc(levelDataOffset + levelData.length);
+  const writeU32 = (offset, value) => output.writeUInt32LE(value, offset);
+  const writeU64 = (offset, value) => output.writeBigUInt64LE(BigInt(value), offset);
+
+  output.set(Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]), 0);
+  writeU32(12, 134); // VK_FORMAT_BC1_RGBA_SRGB_BLOCK
+  writeU32(16, 1);
+  writeU32(20, width);
+  writeU32(24, height);
+  writeU32(28, 0);
+  writeU32(32, 0);
+  writeU32(36, 1);
+  writeU32(40, 1);
+  writeU32(44, 0); // KHR_SUPERCOMPRESSION_NONE
+  writeU32(48, 104);
+  writeU32(52, dfdLength);
+  writeU32(56, 0);
+  writeU32(60, 0);
+  writeU64(64, 0);
+  writeU64(72, 0);
+
+  writeU64(80, levelDataOffset);
+  writeU64(88, levelData.length);
+  writeU64(96, levelData.length);
+
+  writeU32(104, dfdLength);
+  output[112] = 2;
+  output.writeUInt16LE(dfdBlockLength, 114);
+  output[116] = 0x80; // BC1A color model
+  output[117] = 1; // BT.709 primaries
+  output[118] = 2; // sRGB transfer function
+  output[119] = 0;
+  output.set([3, 3, 0, 0], 120); // 4x4x1x1 texel block dimensions minus one
+  output[124] = levelData.length;
+  output[125] = 0;
+  const sampleOffset = 132;
+  output[sampleOffset + 2] = 63; // 64-bit compressed sample
+  output[sampleOffset + 3] = 0;
+  writeU32(sampleOffset + 12, 0xffffffff);
+  output.set(levelData, levelDataOffset);
+  return output;
+};
+
 const makeDocument = ({ embeddedImage, glb }) => {
   const buffer = glb ? { byteLength: geometry.length + png.length } : {
     byteLength: geometry.length,
@@ -89,6 +144,22 @@ const externalDocument = makeDocument({ glb: false });
 await writeFile(new URL("scene.bin", generated), geometry);
 await writeFile(new URL("texture.png", generated), png);
 await writeFile(new URL("scene-external.gltf", generated), JSON.stringify(externalDocument, null, 2));
+
+const ktx2Document = JSON.parse(JSON.stringify(externalDocument));
+ktx2Document.extensionsUsed = ["KHR_texture_basisu"];
+ktx2Document.extensionsRequired = ["KHR_texture_basisu"];
+ktx2Document.images = [{ uri: "scene-ktx2.ktx2", mimeType: "image/ktx2" }];
+ktx2Document.textures = [{ extensions: { KHR_texture_basisu: { source: 0 } } }];
+await writeFile(new URL("scene-ktx2.ktx2", generated), makeKtx2Bc1());
+await writeFile(new URL("scene-ktx2.gltf", generated), JSON.stringify(ktx2Document, null, 2));
+
+const basisKtx2Document = JSON.parse(JSON.stringify(externalDocument));
+basisKtx2Document.extensionsUsed = ["KHR_texture_basisu"];
+basisKtx2Document.extensionsRequired = ["KHR_texture_basisu"];
+basisKtx2Document.images = [{ uri: "scene-ktx2-basis.ktx2", mimeType: "image/ktx2" }];
+basisKtx2Document.textures = [{ extensions: { KHR_texture_basisu: { source: 0 } } }];
+await writeFile(new URL("scene-ktx2-basis.ktx2", generated), basisLzKtx2);
+await writeFile(new URL("scene-ktx2-basis.gltf", generated), JSON.stringify(basisKtx2Document, null, 2));
 
 const glbDocument = makeDocument({ glb: true });
 const json = Buffer.from(JSON.stringify(glbDocument));
