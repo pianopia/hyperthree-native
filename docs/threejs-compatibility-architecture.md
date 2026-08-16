@@ -61,7 +61,9 @@ JS GCとは独立して参照数と破棄を管理する。
 現在はこのフェーズの初期段階として、Boa上の`navigator.gpu`、adapter/device、
 `GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadに加え、BindGroup、
 Pipeline、CommandEncoder、RenderPass、ComputePassのnative実行sliceを実装済みで
-ある。初期の`GPUCanvasContext.configure()`、`getCurrentTexture()`、native
+ある。パイプラインからの`getBindGroupLayout()`、バッファ／テクスチャのcopy command、
+テクスチャ配列・mip・sample・view descriptor、typed upload layoutにも対応した。初期の
+`GPUCanvasContext.configure()`、`getCurrentTexture()`、native
 swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが一時的に生成する
 `undefined`キーだけを隔離する互換層も追加し、Three.js 0.179の
 `WebGPURenderer.renderAsync()`をMeshStandardMaterial、DirectionalLight、Pointsを

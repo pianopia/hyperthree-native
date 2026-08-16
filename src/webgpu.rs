@@ -38,6 +38,27 @@ struct Resources {
     texture_view_sources: HashMap<u64, u64>,
 }
 
+struct TextureCreateInfo<'a> {
+    width: u32,
+    height: u32,
+    depth: u32,
+    format: &'a str,
+    usage: u64,
+    mip_level_count: u32,
+    sample_count: u32,
+    dimension: &'a str,
+}
+
+struct TextureWriteInfo {
+    id: u64,
+    width: u32,
+    height: u32,
+    depth: u32,
+    bytes_per_row: u32,
+    rows_per_image: u32,
+    origin: [u32; 3],
+}
+
 #[derive(Debug)]
 struct QueuedCommandBuffer {
     buffer: wgpu::CommandBuffer,
@@ -270,29 +291,26 @@ impl NativeWebGpuContext {
         Ok(())
     }
 
-    fn create_texture(
-        &self,
-        width: u32,
-        height: u32,
-        format: &str,
-        usage: u64,
-    ) -> Result<u64, String> {
-        if width == 0 || height == 0 {
+    fn create_texture(&self, info: TextureCreateInfo<'_>) -> Result<u64, String> {
+        if info.width == 0 || info.height == 0 || info.depth == 0 {
             return Err("GPUTexture dimensions must be positive".to_string());
+        }
+        if info.mip_level_count == 0 || info.sample_count == 0 {
+            return Err("GPUTexture mip and sample counts must be positive".to_string());
         }
         let id = self.allocate_id()?;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hyperthree-js-gpu-texture"),
             size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
+                width: info.width,
+                height: info.height,
+                depth_or_array_layers: info.depth,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format(format),
-            usage: texture_usage(usage),
+            mip_level_count: info.mip_level_count,
+            sample_count: info.sample_count,
+            dimension: texture_dimension(info.dimension),
+            format: texture_format(info.format),
+            usage: texture_usage(info.usage),
             view_formats: &[],
         });
         self.resources
@@ -303,16 +321,17 @@ impl NativeWebGpuContext {
         Ok(id)
     }
 
-    fn write_texture(&self, id: u64, width: u32, height: u32, bytes: &[u8]) -> Result<(), String> {
+    fn write_texture(&self, info: TextureWriteInfo, bytes: &[u8]) -> Result<(), String> {
         let resources = self
             .resources
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
         let texture = resources
             .textures
-            .get(&id)
-            .ok_or_else(|| format!("unknown GPUTexture handle {id}"))?;
-        let expected = width as usize * height as usize * 4;
+            .get(&info.id)
+            .ok_or_else(|| format!("unknown GPUTexture handle {}", info.id))?;
+        let expected =
+            info.bytes_per_row as usize * info.rows_per_image as usize * info.depth as usize;
         if bytes.len() < expected {
             return Err(format!(
                 "GPUTexture upload is {} bytes, expected at least {expected}",
@@ -323,19 +342,23 @@ impl NativeWebGpuContext {
             wgpu::ImageCopyTexture {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d {
+                    x: info.origin[0],
+                    y: info.origin[1],
+                    z: info.origin[2],
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             bytes,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
+                bytes_per_row: Some(info.bytes_per_row),
+                rows_per_image: Some(info.rows_per_image),
             },
             wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
+                width: info.width,
+                height: info.height,
+                depth_or_array_layers: info.depth,
             },
         );
         Ok(())
@@ -358,17 +381,16 @@ impl NativeWebGpuContext {
         Ok(id)
     }
 
-    fn create_texture_view(&self, texture_id: u64) -> Result<u64, String> {
+    fn create_texture_view(&self, texture_id: u64, descriptor: &Value) -> Result<u64, String> {
         let resources = self
             .resources
             .lock()
             .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let view_descriptor = texture_view_descriptor(descriptor);
         let view = if let Some(texture) = resources.textures.get(&texture_id) {
-            texture.create_view(&wgpu::TextureViewDescriptor::default())
+            texture.create_view(&view_descriptor)
         } else if let Some(surface_texture) = resources.surface_textures.get(&texture_id) {
-            surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default())
+            surface_texture.texture.create_view(&view_descriptor)
         } else {
             return Err(format!("unknown GPUTexture handle {texture_id}"));
         };
@@ -1277,14 +1299,28 @@ pub fn register_bindings(
     register(
         context,
         "__hyperthreeWebGpuCreateTexture",
-        4,
+        8,
         move |_this, args, context| {
             let width = number_arg(args, 0, context)? as u32;
             let height = number_arg(args, 1, context)? as u32;
-            let format = string_arg(args, 2, context)?;
-            let usage = number_arg(args, 3, context)? as u64;
+            let depth = optional_number_arg(args, 2, context)?.unwrap_or(1.0) as u32;
+            let format = string_arg(args, 3, context)?;
+            let usage = number_arg(args, 4, context)? as u64;
+            let mip_level_count = optional_number_arg(args, 5, context)?.unwrap_or(1.0) as u32;
+            let sample_count = optional_number_arg(args, 6, context)?.unwrap_or(1.0) as u32;
+            let dimension =
+                optional_string_arg(args, 7, context)?.unwrap_or_else(|| "2d".to_string());
             create_texture_gpu
-                .create_texture(width, height, &format, usage)
+                .create_texture(TextureCreateInfo {
+                    width,
+                    height,
+                    depth,
+                    format: &format,
+                    usage,
+                    mip_level_count,
+                    sample_count,
+                    dimension: &dimension,
+                })
                 .map(JsValue::from)
                 .map_err(native_error)
         },
@@ -1294,14 +1330,31 @@ pub fn register_bindings(
     register(
         context,
         "__hyperthreeWebGpuWriteTexture",
-        4,
+        8,
         move |_this, args, context| {
             let id = number_arg(args, 0, context)? as u64;
             let width = number_arg(args, 1, context)? as u32;
             let height = number_arg(args, 2, context)? as u32;
-            let bytes = byte_array_arg(args, 3, context)?;
+            let depth = optional_number_arg(args, 3, context)?.unwrap_or(1.0) as u32;
+            let bytes_per_row =
+                optional_number_arg(args, 4, context)?.unwrap_or((width * 4) as f64) as u32;
+            let rows_per_image =
+                optional_number_arg(args, 5, context)?.unwrap_or(height as f64) as u32;
+            let origin = optional_u32_array_arg(args, 6, context)?.unwrap_or([0, 0, 0]);
+            let bytes = byte_array_arg(args, 7, context)?;
             write_texture_gpu
-                .write_texture(id, width, height, &bytes)
+                .write_texture(
+                    TextureWriteInfo {
+                        id,
+                        width,
+                        height,
+                        depth,
+                        bytes_per_row,
+                        rows_per_image,
+                        origin,
+                    },
+                    &bytes,
+                )
                 .map(|_| JsValue::undefined())
                 .map_err(native_error)
         },
@@ -1328,8 +1381,13 @@ pub fn register_bindings(
         1,
         move |_this, args, context| {
             let texture_id = number_arg(args, 0, context)? as u64;
+            let descriptor = if args.len() > 1 {
+                json_arg(args, 1, context)?
+            } else {
+                Value::Null
+            };
             texture_view_gpu
-                .create_texture_view(texture_id)
+                .create_texture_view(texture_id, &descriptor)
                 .map(JsValue::from)
                 .map_err(native_error)
         },
@@ -2177,6 +2235,32 @@ fn texture_view_dimension(value: Option<String>) -> wgpu::TextureViewDimension {
     }
 }
 
+fn texture_dimension(value: &str) -> wgpu::TextureDimension {
+    match value {
+        "1d" => wgpu::TextureDimension::D1,
+        "3d" => wgpu::TextureDimension::D3,
+        _ => wgpu::TextureDimension::D2,
+    }
+}
+
+fn texture_view_descriptor(value: &Value) -> wgpu::TextureViewDescriptor<'static> {
+    wgpu::TextureViewDescriptor {
+        label: None,
+        format: json_string(value, "format").map(|format| texture_format(&format)),
+        dimension: json_string(value, "dimension")
+            .map(|dimension| texture_view_dimension(Some(dimension))),
+        aspect: match json_string(value, "aspect").as_deref() {
+            Some("depth-only") => wgpu::TextureAspect::DepthOnly,
+            Some("stencil-only") => wgpu::TextureAspect::StencilOnly,
+            _ => wgpu::TextureAspect::All,
+        },
+        base_mip_level: json_u32(value, "baseMipLevel", 0),
+        mip_level_count: optional_u32(json_u32(value, "mipLevelCount", 0)),
+        base_array_layer: json_u32(value, "baseArrayLayer", 0),
+        array_layer_count: optional_u32(json_u32(value, "arrayLayerCount", 0)),
+    }
+}
+
 fn vertex_format(value: &str) -> wgpu::VertexFormat {
     match value {
         "float32" => wgpu::VertexFormat::Float32,
@@ -2335,6 +2419,10 @@ fn non_zero_u64(value: u64) -> Option<std::num::NonZeroU64> {
     std::num::NonZeroU64::new(value)
 }
 
+fn optional_u32(value: u32) -> Option<u32> {
+    (value != 0).then_some(value)
+}
+
 fn value_u64(values: &[Value], index: usize) -> Result<u64, String> {
     values
         .get(index)
@@ -2388,6 +2476,17 @@ fn number_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult
     }
 }
 
+fn optional_number_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<Option<f64>> {
+    if args.get(index).is_none_or(JsValue::is_undefined) {
+        return Ok(None);
+    }
+    number_arg(args, index, context).map(Some)
+}
+
 fn string_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<String> {
     args.get_or_undefined(index)
         .to_string(context)
@@ -2397,6 +2496,44 @@ fn string_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult
                 .with_message("WebGPU argument must be a string")
                 .into()
         })
+}
+
+fn optional_string_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<Option<String>> {
+    if args.get(index).is_none_or(JsValue::is_undefined) {
+        return Ok(None);
+    }
+    string_arg(args, index, context).map(Some)
+}
+
+fn optional_u32_array_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<Option<[u32; 3]>> {
+    let Some(value) = args.get(index) else {
+        return Ok(None);
+    };
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let source = value.to_string(context)?.to_std_string_escaped();
+    let values = serde_json::from_str::<Vec<u32>>(&source).map_err(|_| {
+        JsNativeError::typ().with_message("WebGPU origin must be a JSON uint array")
+    })?;
+    if values.len() > 3 {
+        return Err(JsNativeError::range()
+            .with_message("WebGPU origin has too many components")
+            .into());
+    }
+    Ok(Some([
+        values.first().copied().unwrap_or(0),
+        values.get(1).copied().unwrap_or(0),
+        values.get(2).copied().unwrap_or(0),
+    ]))
 }
 
 fn byte_array_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<Vec<u8>> {
@@ -2493,7 +2630,15 @@ fn texture_format(format: &str) -> wgpu::TextureFormat {
         "bgra8unorm" => wgpu::TextureFormat::Bgra8Unorm,
         "bgra8unorm-srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
         "rgba8unorm-srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
+        "rgba8snorm" => wgpu::TextureFormat::Rgba8Snorm,
+        "rgba8uint" => wgpu::TextureFormat::Rgba8Uint,
+        "rgba8sint" => wgpu::TextureFormat::Rgba8Sint,
+        "rgba16uint" => wgpu::TextureFormat::Rgba16Uint,
+        "rgba16sint" => wgpu::TextureFormat::Rgba16Sint,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        "r32float" => wgpu::TextureFormat::R32Float,
+        "r32uint" => wgpu::TextureFormat::R32Uint,
+        "r32sint" => wgpu::TextureFormat::R32Sint,
         "depth24plus" => wgpu::TextureFormat::Depth24Plus,
         "depth24plus-stencil8" => wgpu::TextureFormat::Depth24PlusStencil8,
         "depth32float" => wgpu::TextureFormat::Depth32Float,
@@ -2577,9 +2722,19 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     const size = descriptor.size || {};
     const width = typeof size === 'number' ? size : (Array.isArray(size) ? (size[0] ?? 1) : (size.width ?? 1));
     const height = typeof size === 'number' ? 1 : (Array.isArray(size) ? (size[1] ?? 1) : (size.height ?? 1));
-    const id = __hyperthreeWebGpuCreateTexture(width, height, descriptor.format ?? 'rgba8unorm', descriptor.usage ?? GPUTextureUsage.TEXTURE_BINDING);
+    const depth = typeof size === 'number' || Array.isArray(size) ? (Array.isArray(size) ? (size[2] ?? 1) : 1) : (size.depthOrArrayLayers ?? size.depth ?? 1);
+    const id = __hyperthreeWebGpuCreateTexture(
+      width,
+      height,
+      depth,
+      descriptor.format ?? 'rgba8unorm',
+      descriptor.usage ?? GPUTextureUsage.TEXTURE_BINDING,
+      descriptor.mipLevelCount ?? 1,
+      descriptor.sampleCount ?? 1,
+      descriptor.dimension ?? '2d',
+    );
     return makeHandle(id, {
-      createView: () => makeHandle(__hyperthreeWebGpuCreateTextureView(id), { __textureView: true }),
+      createView: (viewDescriptor = {}) => makeHandle(__hyperthreeWebGpuCreateTextureView(id, descriptorJson(viewDescriptor)), { __textureView: true }),
       destroy: () => {},
     });
   };
@@ -2587,7 +2742,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     const id = __hyperthreeWebGpuGetCurrentTexture();
     return makeHandle(id, {
       __surfaceTexture: true,
-      createView: () => makeHandle(__hyperthreeWebGpuCreateTextureView(id), { __textureView: true }),
+      createView: (viewDescriptor = {}) => makeHandle(__hyperthreeWebGpuCreateTextureView(id, descriptorJson(viewDescriptor)), { __textureView: true }),
       destroy: () => {},
     });
   };
@@ -2676,7 +2831,18 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       },
       writeTexture(destination, data, dataLayout, size) {
         const bytes = new Uint8Array(data.buffer, data.byteOffset ?? 0, data.byteLength ?? data.length);
-        __hyperthreeWebGpuWriteTexture(destination.texture.__hyperthreeHandle, size.width, size.height, bytes);
+        const origin = destination.origin ?? { x: 0, y: 0, z: 0 };
+        const normalizedSize = Array.isArray(size) ? { width: size[0], height: size[1] ?? 1, depthOrArrayLayers: size[2] ?? 1 } : size;
+        __hyperthreeWebGpuWriteTexture(
+          destination.texture.__hyperthreeHandle,
+          normalizedSize.width,
+          normalizedSize.height,
+          normalizedSize.depthOrArrayLayers ?? 1,
+          dataLayout.bytesPerRow ?? normalizedSize.width * 4,
+          dataLayout.rowsPerImage ?? normalizedSize.height,
+          JSON.stringify([origin.x ?? 0, origin.y ?? 0, origin.z ?? 0]),
+          bytes,
+        );
       },
       submit(commandBuffers) { __hyperthreeWebGpuSubmit(JSON.stringify((commandBuffers ?? []).map(handleId))); },
       onSubmittedWorkDone: async () => {},

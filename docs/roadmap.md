@@ -25,6 +25,8 @@
 - [x] WebGPU mapped buffer upload, native canvas/DOM shim, and WGSL compatibility normalization
 - [x] Boa/Three.js node-cache compatibility shim for standard WebGPURenderer initialization
 - [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
+- [x] Native pipeline-derived bind group layouts and GPU buffer/texture copy commands
+- [x] WebGPU texture arrays, mip/sample descriptors, view descriptors, and typed upload layout
 - [x] Initial GPUCanvasContext and native swapchain presentation path
 - [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
