@@ -3,7 +3,7 @@ use crate::{
     audio::{decode_audio, AudioEngine},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     draco::decode_mesh as decode_draco_mesh,
-    storage::StorageStore,
+    storage::{SandboxFileStore, StorageStore},
     webgpu::SharedNativeWebGpuContext,
 };
 use anyhow::{Context as _, Result};
@@ -64,6 +64,7 @@ impl JsRuntime {
         let runtime_start = Instant::now();
         let audio_engine = Rc::new(RefCell::new(AudioEngine::default()));
         let storage_store = Rc::new(RefCell::new(StorageStore::new(&asset_root)?));
+        let sandbox_file_store = Rc::new(RefCell::new(SandboxFileStore::new(&asset_root)?));
         context
             .register_global_builtin_callable(js_string!("__hyperthreeNow"), 0, unsafe {
                 NativeFunction::from_closure(move |_this, _args, _context| {
@@ -831,6 +832,108 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register storage save binding: {error}"))?;
 
+        let file_store_for_read = sandbox_file_store.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeFileSystemRead"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let path = string_arg(args, 0, context)?;
+                    let bytes = file_store_for_read.borrow().read(&path).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to read sandbox file: {error}"))
+                    })?;
+                    let buffer =
+                        JsArrayBuffer::from_byte_block(AlignedVec::from_iter(0, bytes), context)
+                            .map_err(|error| {
+                                JsNativeError::error().with_message(format!(
+                                    "failed to create sandbox ArrayBuffer: {error}"
+                                ))
+                            })?;
+                    Ok(buffer.into())
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register filesystem read binding: {error}")
+            })?;
+
+        let file_store_for_write = sandbox_file_store.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeFileSystemWrite"),
+                2,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let path = string_arg(args, 0, context)?;
+                        let bytes = byte_array_value(args.get_or_undefined(1), context)?;
+                        file_store_for_write
+                            .borrow()
+                            .write(&path, &bytes)
+                            .map_err(|error| {
+                                JsNativeError::error()
+                                    .with_message(format!("failed to write sandbox file: {error}"))
+                            })?;
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register filesystem write binding: {error}")
+            })?;
+
+        let file_store_for_remove = sandbox_file_store.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeFileSystemRemove"),
+                2,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let path = string_arg(args, 0, context)?;
+                        let recursive = args.get_or_undefined(1).to_boolean();
+                        file_store_for_remove
+                            .borrow()
+                            .remove(&path, recursive)
+                            .map_err(|error| {
+                                JsNativeError::error().with_message(format!(
+                                    "failed to remove sandbox entry: {error}"
+                                ))
+                            })?;
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register filesystem remove binding: {error}")
+            })?;
+
+        let file_store_for_list = sandbox_file_store.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeFileSystemList"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let path = string_arg(args, 0, context)?;
+                    let entries = file_store_for_list.borrow().list(&path).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to list sandbox directory: {error}"))
+                    })?;
+                    let values = entries
+                        .into_iter()
+                        .map(|(name, is_directory)| {
+                            let entry = JsObject::with_object_proto(context.intrinsics());
+                            entry.set(js_string!("name"), JsString::from(name), false, context)?;
+                            entry.set(
+                                js_string!("kind"),
+                                JsString::from(if is_directory { "directory" } else { "file" }),
+                                false,
+                                context,
+                            )?;
+                            Ok::<JsValue, JsError>(entry.into())
+                        })
+                        .collect::<JsResult<Vec<_>>>()?;
+                    Ok(JsArray::from_iter(values, context).into())
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register filesystem list binding: {error}")
+            })?;
+
         context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeAudio"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
@@ -1397,6 +1500,81 @@ impl JsRuntime {
                 };
                 globalThis.localStorage = globalThis.localStorage || makeStorage(true);
                 globalThis.sessionStorage = globalThis.sessionStorage || makeStorage(false);
+                globalThis.navigator = globalThis.navigator || {};
+                globalThis.TextEncoder = globalThis.TextEncoder || class TextEncoder {
+                  encode(value) {
+                    const bytes = [];
+                    for (const character of String(value)) {
+                      const code = character.codePointAt(0);
+                      if (code < 0x80) bytes.push(code);
+                      else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+                      else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+                      else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+                    }
+                    return new Uint8Array(bytes);
+                  }
+                };
+                const sandboxJoin = (base, name) => base ? `${base}/${String(name)}` : String(name);
+                const sandboxName = (path) => String(path).split('/').pop() || '';
+                const makeFileSystemFileHandle = (path) => ({
+                  kind: 'file',
+                  name: sandboxName(path),
+                  async getFile() {
+                    const bytes = __hyperthreeFileSystemRead(path);
+                    return new File([bytes], sandboxName(path), { lastModified: Date.now() });
+                  },
+                  async createWritable() {
+                    const chunks = [];
+                    return {
+                      async write(data) {
+                        if (data && data.type === 'write') data = data.data;
+                        if (typeof data === 'string') chunks.push(new TextEncoder().encode(data));
+                        else if (data instanceof Blob) chunks.push(new Uint8Array(await data.arrayBuffer()));
+                        else if (data instanceof ArrayBuffer) chunks.push(new Uint8Array(data));
+                        else if (ArrayBuffer.isView(data)) chunks.push(new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength));
+                        else throw new TypeError('FileSystemWritableFileStream.write data is unsupported');
+                      },
+                      async close() {
+                        const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+                        const bytes = new Uint8Array(size);
+                        let offset = 0;
+                        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+                        __hyperthreeFileSystemWrite(path, bytes);
+                      },
+                      async abort() { chunks.length = 0; },
+                    };
+                  },
+                });
+                const makeFileSystemDirectoryHandle = (path) => ({
+                  kind: 'directory',
+                  name: sandboxName(path),
+                  async getFileHandle(name, options = {}) {
+                    const handle = makeFileSystemFileHandle(sandboxJoin(path, name));
+                    if (!options.create) await handle.getFile();
+                    return handle;
+                  },
+                  async getDirectoryHandle(name, options = {}) {
+                    const childPath = sandboxJoin(path, name);
+                    const handle = makeFileSystemDirectoryHandle(childPath);
+                    if (!options.create) await handle.entries().next();
+                    return handle;
+                  },
+                  async removeEntry(name, options = {}) {
+                    __hyperthreeFileSystemRemove(sandboxJoin(path, name), Boolean(options.recursive));
+                  },
+                  async *entries() {
+                    for (const entry of __hyperthreeFileSystemList(path)) {
+                      const childPath = sandboxJoin(path, entry.name);
+                      yield [entry.name, entry.kind === 'directory' ? makeFileSystemDirectoryHandle(childPath) : makeFileSystemFileHandle(childPath)];
+                    }
+                  },
+                  async *keys() { for await (const [name] of this.entries()) yield name; },
+                  async *values() { for await (const [, handle] of this.entries()) yield handle; },
+                });
+                globalThis.navigator.storage = globalThis.navigator.storage || {
+                  async getDirectory() { return makeFileSystemDirectoryHandle(''); },
+                  async estimate() { return { usage: 0, quota: 64 * 1024 * 1024 }; },
+                };
                 globalThis.__hyperthreeBlobUrls = globalThis.__hyperthreeBlobUrls || new Map();
                 globalThis.__hyperthreeBlobUrlId = globalThis.__hyperthreeBlobUrlId || 0;
                 globalThis.URL = globalThis.URL || class URL {
@@ -3082,6 +3260,46 @@ mod tests {
         restored
             .execute_source(
                 "if (localStorage.length !== 2 || localStorage.getItem('score') !== '42' || localStorage.getItem('pilot') !== 'Ada' || sessionStorage.getItem('temporary') !== null) throw new Error('storage persistence probe failed');",
+            )
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_system_access_handles_round_trip_sandboxed_bytes() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hyperthree-file-system-test-{suffix}"));
+        fs::create_dir_all(&root).unwrap();
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let mut runtime = JsRuntime::new(render_state, input_state, &root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__fileSystemProbe = false;
+                navigator.storage.getDirectory().then(async (root) => {
+                  const saves = await root.getDirectoryHandle('saves', { create: true });
+                  const slot = await saves.getFileHandle('slot.bin', { create: true });
+                  const writable = await slot.createWritable();
+                  await writable.write(new Uint8Array([3, 5, 8, 13]));
+                  await writable.close();
+                  const file = await slot.getFile();
+                  const bytes = new Uint8Array(await file.arrayBuffer());
+                  const names = [];
+                  for await (const [name] of saves.entries()) names.push(name);
+                  __fileSystemProbe = file.name === 'slot.bin' && bytes.length === 4 &&
+                    bytes[0] === 3 && bytes[3] === 13 && names.includes('slot.bin');
+                  await saves.removeEntry('slot.bin');
+                });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source(
+                "if (globalThis.__fileSystemProbe !== true) throw new Error('File System Access probe failed');",
             )
             .unwrap();
         fs::remove_dir_all(root).unwrap();

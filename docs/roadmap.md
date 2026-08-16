@@ -15,7 +15,8 @@
 - [x] Native `performance.now()` and requestAnimationFrame compatibility loop
 - [x] Native Web Audio decode/playback bridge, AudioContext/Gain/Panner shape, and Blob/File/object-URL asset boundary
 - [x] Project-sandboxed localStorage/sessionStorage with restart persistence
-- [ ] File System Access API and cross-platform audio-device/spatial-DSP validation
+- [x] Origin-private File System Access API slice (navigator.storage.getDirectory, file handles, writable streams, listing, removal)
+- [ ] Cross-platform audio-device/spatial-DSP validation
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry
 - [x] Three.js position/index BufferGeometry registration and native GPU draw path

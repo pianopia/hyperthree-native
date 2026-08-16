@@ -83,6 +83,17 @@ SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描�
 
 ゲームのセーブデータには、プロジェクト内の`.hyperthree/storage`へ保存される
 `localStorage`と、セッション限定の`sessionStorage`を利用できます。
+バイナリのセーブデータやAI生成アセットには、origin-privateなFile System Access
+経路も利用できます。
+
+```js
+const root = await navigator.storage.getDirectory();
+const saves = await root.getDirectoryHandle("saves", { create: true });
+const file = await saves.getFileHandle("slot.bin", { create: true });
+const writable = await file.createWritable();
+await writable.write(new Uint8Array([1, 2, 3]));
+await writable.close();
+```
 
 ## 構成
 
