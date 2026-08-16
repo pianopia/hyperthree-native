@@ -46,6 +46,44 @@ const dracoBox = Buffer.from(
   "base64",
 );
 
+const makeKtx2Uastc = () => {
+  const block = Buffer.from([0xf7, 0x1f, 0x08, 0xe4, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  const levelDataOffset = 152;
+  const output = Buffer.alloc(levelDataOffset + block.length);
+  const writeU32 = (offset, value) => output.writeUInt32LE(value, offset);
+  const writeU64 = (offset, value) => output.writeBigUInt64LE(BigInt(value), offset);
+
+  output.set(Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]), 0);
+  writeU32(12, 0); // VK_FORMAT_UNDEFINED; DFD identifies UASTC LDR.
+  writeU32(16, 1);
+  writeU32(20, 4);
+  writeU32(24, 4);
+  writeU32(28, 0);
+  writeU32(32, 0);
+  writeU32(36, 1);
+  writeU32(40, 1);
+  writeU32(44, 0); // KHR_SUPERCOMPRESSION_NONE; raw 16-byte UASTC block.
+  writeU32(48, 104);
+  writeU32(52, 44);
+  writeU32(56, 0);
+  writeU32(60, 0);
+  writeU64(64, 0);
+  writeU64(72, 0);
+  writeU64(80, levelDataOffset);
+  writeU64(88, block.length);
+  writeU64(96, block.length);
+
+  // KHR_DF_MODEL_UASTC, 4x4 block, 128-bit payload, RGB channel.
+  output.set(Buffer.from([
+    0x2c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x28, 0x00,
+    0xa6, 0x01, 0x02, 0x00, 0x03, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+  ]), 104);
+  output.set(block, levelDataOffset);
+  return output;
+};
+
 const makeKtx2Bc1 = () => {
   const width = 4;
   const height = 4;
@@ -157,6 +195,14 @@ ktx2Document.images = [{ uri: "scene-ktx2.ktx2", mimeType: "image/ktx2" }];
 ktx2Document.textures = [{ extensions: { KHR_texture_basisu: { source: 0 } } }];
 await writeFile(new URL("scene-ktx2.ktx2", generated), makeKtx2Bc1());
 await writeFile(new URL("scene-ktx2.gltf", generated), JSON.stringify(ktx2Document, null, 2));
+
+const uastcKtx2Document = JSON.parse(JSON.stringify(externalDocument));
+uastcKtx2Document.extensionsUsed = ["KHR_texture_basisu"];
+uastcKtx2Document.extensionsRequired = ["KHR_texture_basisu"];
+uastcKtx2Document.images = [{ uri: "scene-ktx2-uastc.ktx2", mimeType: "image/ktx2" }];
+uastcKtx2Document.textures = [{ extensions: { KHR_texture_basisu: { source: 0 } } }];
+await writeFile(new URL("scene-ktx2-uastc.ktx2", generated), makeKtx2Uastc());
+await writeFile(new URL("scene-ktx2-uastc.gltf", generated), JSON.stringify(uastcKtx2Document, null, 2));
 
 const basisKtx2Document = JSON.parse(JSON.stringify(externalDocument));
 basisKtx2Document.extensionsUsed = ["KHR_texture_basisu"];

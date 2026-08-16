@@ -48,7 +48,8 @@
 - [x] Standard KTX2Loader raw BC1 path through KHR_texture_basisu and native GPU upload
 - [x] Native BasisLZ/UASTC transcoder binding with KTX2Loader bridge and compressed/uncompressed target selection
 - [x] Native raw KTX2 mip/face transfer without a browser Worker
-- [ ] UASTC KTX2 end-to-end fixture across supported GPU target formats
+- [x] UASTC KTX2 end-to-end fixture for RGBA32 and BC7 target paths
+- [ ] UASTC target matrix across ASTC/BC3/BC1/ETC2 on Windows/Linux GPU backends
 - [x] DRACO native mesh decode through standard GLTFLoader/DRACOLoader with Khronos Box fixture
 - [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite

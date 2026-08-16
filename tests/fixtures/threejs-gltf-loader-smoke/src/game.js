@@ -79,6 +79,7 @@ globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
 globalThis.__gltfKtx2NativeHook = false;
+globalThis.__gltfUastcKtx2Loaded = false;
 globalThis.__gltfBasisKtx2Loaded = false;
 globalThis.__gltfDracoLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
@@ -178,13 +179,14 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     globalThis.__gltfSmokeStage = `loaded-${label}`;
     return value;
   });
-  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf, dracoGltf] = await Promise.all([
+  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf, uastcKtx2Gltf, dracoGltf] = await Promise.all([
     trackLoad("gltf", loader.loadAsync("public/scene.gltf")),
     trackLoad("external", loader.loadAsync("public/generated/scene-external.gltf")),
     trackLoad("glb", loader.loadAsync("public/generated/scene.glb")),
     trackLoad("meshopt", loader.loadAsync("public/generated/scene-meshopt.gltf")),
     trackLoad("ktx2", loader.loadAsync("public/generated/scene-ktx2.gltf")),
     trackLoad("basis", loader.loadAsync("public/generated/scene-ktx2-basis.gltf")),
+    trackLoad("uastc", loader.loadAsync("public/generated/scene-ktx2-uastc.gltf")),
     trackLoad("draco", loader.loadAsync("public/generated/scene-draco.gltf")),
   ]);
   globalThis.__gltfSmokeStage = "after-gltf-load";
@@ -221,6 +223,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     basisKtx2Textured.material.map.image?.width > 0 &&
     basisKtx2Textured.material.map.image?.height > 0,
   );
+  const uastcKtx2Textured = uastcKtx2Gltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfUastcKtx2Loaded = Boolean(
+    uastcKtx2Textured?.material?.map?.image?.width === 4 &&
+    uastcKtx2Textured.material.map.image.height === 4 &&
+    uastcKtx2Textured.material.map.image.data?.byteLength === 64,
+  );
   const dracoMesh = dracoGltf.scene.getObjectByProperty("isMesh", true);
   globalThis.__gltfDracoLoaded = Boolean(
     dracoMesh?.geometry?.attributes?.position?.count === 24 &&
@@ -235,6 +243,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   scene.add(glb.scene);
   scene.add(ktx2Gltf.scene);
   scene.add(basisKtx2Gltf.scene);
+  scene.add(uastcKtx2Gltf.scene);
   scene.add(dracoGltf.scene);
   globalThis.__gltfEnvironmentSmoke = scene.environment === environmentTexture;
   globalThis.__gltfSmokeStage = "before-render";
@@ -249,7 +258,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfDracoLoaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

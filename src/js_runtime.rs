@@ -2492,6 +2492,37 @@ mod tests {
     }
 
     #[test]
+    fn native_uastc_ktx2_binding_transcodes_raw_uastc_blocks() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__uastcProbe = false;
+                fetch('data:application/octet-stream;base64,q0tUWCAyMLsNChoKAAAAAAEAAAAEAAAABAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAaAAAACwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACYAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAsAAAAAAAAAAIAKACmAQIAAwMAABAAAAAAAAAAAAB/AAAAAAAAAAAA/////wAAAAD3HwjkHwAAAAAAAAAAAAAA')
+                  .then((response) => response.arrayBuffer())
+                  .then((buffer) => {
+                    const rgba = __hyperthreeTranscodeKtx2(new Uint8Array(buffer), {});
+                    const bc7 = __hyperthreeTranscodeKtx2(new Uint8Array(buffer), { bptcSupported: true });
+                    const rgbaMipmap = rgba.data.faces[0].mipmaps[0];
+                    const bc7Mipmap = bc7.data.faces[0].mipmaps[0];
+                    globalThis.__uastcProbe = rgba.data.format === 'RGBAFormat' &&
+                      rgbaMipmap.width === 4 && rgbaMipmap.height === 4 &&
+                      rgbaMipmap.data.byteLength === 64 &&
+                      bc7.data.format === 'RGBA_BPTC_Format' &&
+                      bc7Mipmap.data.byteLength === 16;
+                  });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source("if (globalThis.__uastcProbe !== true) throw new Error('UASTC KTX2 binding probe failed');")
+            .unwrap();
+    }
+
+    #[test]
     fn normalizes_boa_class_constructor_lexicals_only() {
         let source = "/* GLTFLoader */ class Example{constructor(){const value=1;let other=2;this.value=value+other;}method(){const untouched=3;return untouched;}} let of='';";
         let normalized = normalize_three_compatibility_source(source);

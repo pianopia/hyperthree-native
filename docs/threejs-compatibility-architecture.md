@@ -104,7 +104,8 @@ Three.js側の`GLTFLoader`へnative MeshoptDecoderを自動注入し、属性・
 GPU圧縮テクスチャとして読み込むfixtureも検証済みである。さらにnative `basisu` transcoderを
 `KTX2Loader`のworker境界へ差し込み、raw KTX2のmip/face payloadと、BasisLZ/UASTCを
 ASTC/BC7/BC3/BC1/ETC2/RGBA32へ実行時選択できるようにした。BasisLZの8×8実ファイル
-fixtureとraw BC1 fixtureは標準GLTFLoader経由で検証済みである。
+fixtureとraw BC1 fixtureは標準GLTFLoader経由で検証済みである。さらに4×4 raw UASTC fixtureを
+RGBA32/BC7へ変換するbinding testと、標準GLTFLoader経由のend-to-end fixtureを追加した。
 
 ### Draco
 
@@ -122,8 +123,8 @@ bridgeがKTX2Loader互換のlevel/face配列を作り、`CompressedTexture`のBC
 ネイティブGPUへ渡せる。
 BasisLZ/UASTCのKTX2コンテナはnative transcoderが全mip/face/layerを展開し、
 raw KTX2とBasisLZ/UASTCの結果をworker互換の`faces[].mipmaps[]`としてThree.jsへ返す。
-BasisLZの実ファイルfixtureは検証済みで、
-UASTCのGPUターゲット選択fixtureは次段階である。
+BasisLZの実ファイルfixtureと、UASTCのRGBA32/BC7 target fixtureは検証済みである。
+ASTC/BC3/BC1/ETC2の実GPU別target matrixは次段階である。
 
 ### Phase B: Three.js renderer実行
 
