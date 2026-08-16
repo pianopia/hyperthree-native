@@ -118,7 +118,7 @@ RGBA `data`を受け取り、nativeの通常の2D `GPUTexture`へコピーして
 `texture_2d<f32>`と`textureSample`へ正規化する。1×1 RGBAフレームの実サンプリングと
 MAP_READ readbackをfixtureで検証済みである。これはブラウザの`GPUExternalTexture`と同じ
 ゼロコピー共有ではなく、安全なRGBA取り込みフォールバックであり、HTMLVideoElementの
-デコーダー、色空間変換、videoFrameCallback、フレーム更新スケジューリングは未実装である。
+codecデコーダー、色空間変換、音声トラックは別のnative media backendで扱う。
 WebCodecs境界として、packed RGBAを保持する`VideoFrame`の`codedWidth`、`codedHeight`、
 `displayWidth`、`displayHeight`、`timestamp`、`clone()`、`copyTo()`、`close()`も公開した。
 Three.jsの標準`VideoFrameTexture.setFrame()`へ渡し、同じframeを
@@ -147,7 +147,7 @@ JS sessionを再生成してentry pointを再実行するところまで検証�
 は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
 Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。残りは透明合成を含む
-present/device-loss lifecycle、DRACO圧縮形式の追加組み合わせ、動画codecと連続frame scheduling、
+present/device-loss lifecycle、DRACO圧縮形式の追加組み合わせ、動画codecと音声トラック、
 未実装の標準WebGPU APIを段階的に埋める。
 
 ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、
