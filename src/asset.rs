@@ -108,6 +108,26 @@ impl AssetStore {
         })
     }
 
+    /// Read a project-relative asset for JavaScript APIs such as `fetch()`.
+    ///
+    /// Native decoders should continue to use `load_geometry()` and the mmap
+    /// directly. This copy exists at the browser-compatibility boundary where
+    /// the Fetch/ArrayBuffer contract requires JS-owned bytes.
+    pub fn read_bytes(&mut self, relative_path: &str) -> Result<Vec<u8>> {
+        let relative = validate_relative_path(relative_path)?;
+        let canonical = self.resolve_path(&relative, relative_path)?;
+        if !self.mapped.contains_key(&canonical) {
+            self.mapped
+                .insert(canonical.clone(), Arc::new(MappedAsset::open(&canonical)?));
+        }
+        let mapped = self
+            .mapped
+            .get(&canonical)
+            .expect("asset mapping was inserted")
+            .clone();
+        Ok(mapped.bytes().to_vec())
+    }
+
     pub fn load_geometry(
         &mut self,
         relative_path: &str,

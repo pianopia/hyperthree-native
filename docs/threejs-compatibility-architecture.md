@@ -71,8 +71,15 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 含むシーンでApple M4/Metal上に接続できることを確認した。さらにAnimationMixerで
 変化するTransform、morph target、SkinnedMesh/Skeletonのbone transformを同じ標準Renderer
 経路で検証し、Three.jsが生成するtexture-array `textureLoad`のLOD型を現行Naga向けに
-正規化した。次はresize/device-lost/present lifecycleを完成させ、GLTFLoaderのskin／
-bone-path、完全なreadback、未実装の標準WebGPU APIを段階的に埋める。
+正規化した。さらにプロジェクト相対`fetch()`、`Request`、`Response`、`Headers`、
+`ArrayBuffer`、`TextDecoder`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
+用意した。Three.js 0.179の`MeshStandardNodeMaterial`、TSL `colorNode`、
+`PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
+実シーンをスモーク済みである。次はresize/device-lost/present lifecycleを完成させ、
+GLTFLoader本体のskin／bone-path、画像／KTX2 decode、完全なreadback、未実装の標準
+WebGPU APIを段階的に埋める。現行Boa 0.21はGLTFLoaderの大規模モジュール評価時に
+内部panicするため、ランタイムではpanicをエラーへ変換してプロセスを保護し、Loader
+互換性の完了条件はV8移行またはBoa修正版で再検証する。
 
 ### Phase B: Three.js renderer実行
 
@@ -91,6 +98,8 @@ animation clipを、JSヒープを経由せずネイティブ側でストリー�
 
 TSL/NodeMaterialのshader graph、custom particle、instancing、post-processing、shadow、
 environment lighting、compute culling、indirect drawを同じWebGPU契約で実行する。
+NodeMaterialとpost-processingの標準経路はスモーク済みだが、公式サンプル全体、画像／
+環境テクスチャ、MRT、shadow、indirect drawはまだ互換性テストを追加する段階である。
 
 ## 互換性の判定基準
 

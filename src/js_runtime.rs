@@ -8,12 +8,16 @@ use boa_engine::{
     builtins::promise::PromiseState,
     js_string,
     module::{Module, ModuleLoader, Referrer},
-    object::JsObject,
+    object::{
+        builtins::{AlignedVec, JsArrayBuffer},
+        JsObject,
+    },
     Context, JsArgs, JsError, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Source,
 };
 use std::{
     cell::RefCell,
     fs,
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -769,6 +773,28 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register asset binding: {error}"))?;
 
+        let asset_store_for_fetch = asset_store.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeReadAsset"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let path = string_arg(args, 0, context)?;
+                    let bytes = asset_store_for_fetch
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("asset store poisoned"))?
+                        .read_bytes(&path)
+                        .map_err(|error| JsNativeError::error().with_message(error.to_string()))?;
+                    let block = AlignedVec::from_iter(0, bytes);
+                    let buffer =
+                        JsArrayBuffer::from_byte_block(block, context).map_err(|error| {
+                            JsNativeError::error().with_message(format!(
+                                "failed to create asset ArrayBuffer: {error}"
+                            ))
+                        })?;
+                    Ok(buffer.into())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register asset fetch binding: {error}"))?;
+
         let asset_draw_store = asset_store;
         let asset_draw_state = render_state;
         context
@@ -868,6 +894,67 @@ impl JsRuntime {
                   globalThis.__hyperthreeAnimationFrameQueue =
                     globalThis.__hyperthreeAnimationFrameQueue.filter((entry) => entry.id !== id);
                 };
+                globalThis.Headers = globalThis.Headers || class Headers {
+                  constructor(init = {}) {
+                    this.__values = new Map();
+                    for (const [key, value] of Object.entries(init)) this.__values.set(String(key).toLowerCase(), String(value));
+                  }
+                  get(key) { return this.__values.get(String(key).toLowerCase()) ?? null; }
+                  has(key) { return this.__values.has(String(key).toLowerCase()); }
+                };
+                globalThis.Request = globalThis.Request || class Request {
+                  constructor(input, init = {}) {
+                    this.url = typeof input === 'string' ? input : input.url;
+                    this.method = init.method || (typeof input === 'object' && input.method) || 'GET';
+                    this.headers = init.headers || (typeof input === 'object' && input.headers) || new Headers();
+                    this.signal = init.signal || (typeof input === 'object' && input.signal) || null;
+                  }
+                };
+                globalThis.AbortController = globalThis.AbortController || class AbortController {
+                  constructor() { this.signal = { aborted: false }; }
+                  abort() { this.signal.aborted = true; }
+                };
+                globalThis.AbortSignal = globalThis.AbortSignal || {
+                  any(signals) { return signals[0] || { aborted: false }; }
+                };
+                globalThis.TextDecoder = globalThis.TextDecoder || class TextDecoder {
+                  decode(input) {
+                    const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : new Uint8Array(input.buffer, input.byteOffset || 0, input.byteLength);
+                    let value = '';
+                    for (let index = 0; index < bytes.length; index += 1) {
+                      const first = bytes[index];
+                      if (first < 0x80) { value += String.fromCharCode(first); continue; }
+                      if ((first & 0xe0) === 0xc0 && index + 1 < bytes.length) {
+                        value += String.fromCodePoint(((first & 0x1f) << 6) | (bytes[++index] & 0x3f));
+                        continue;
+                      }
+                      if ((first & 0xf0) === 0xe0 && index + 2 < bytes.length) {
+                        value += String.fromCodePoint(((first & 0x0f) << 12) | ((bytes[++index] & 0x3f) << 6) | (bytes[++index] & 0x3f));
+                        continue;
+                      }
+                      if ((first & 0xf8) === 0xf0 && index + 3 < bytes.length) {
+                        value += String.fromCodePoint(((first & 0x07) << 18) | ((bytes[++index] & 0x3f) << 12) | ((bytes[++index] & 0x3f) << 6) | (bytes[++index] & 0x3f));
+                      }
+                    }
+                    return value;
+                  }
+                };
+                globalThis.fetch = globalThis.fetch || (async (input) => {
+                  const request = input instanceof Request ? input : new Request(input);
+                  const buffer = __hyperthreeReadAsset(request.url);
+                  const headers = new Headers({ 'Content-Length': buffer.byteLength });
+                  return {
+                    url: request.url,
+                    status: 200,
+                    statusText: 'OK',
+                    ok: true,
+                    headers,
+                    body: undefined,
+                    arrayBuffer: async () => buffer,
+                    text: async () => new TextDecoder().decode(buffer),
+                    json: async () => JSON.parse(new TextDecoder().decode(buffer)),
+                  };
+                });
                 "#,
             ))
             .map(|_| ())
@@ -892,27 +979,47 @@ impl JsRuntime {
 
     pub fn execute_source(&mut self, source: &str) -> Result<()> {
         let source = normalize_three_compatibility_source(source);
-        self.context
-            .eval(Source::from_bytes(source.as_ref()))
+        let evaluated = catch_unwind(AssertUnwindSafe(|| {
+            self.context.eval(Source::from_bytes(source.as_ref()))
+        }))
+        .map_err(|panic| {
+            anyhow::anyhow!("JavaScript evaluation panicked: {}", panic_message(panic))
+        })?;
+        evaluated
             .map(|_| ())
             .map_err(|error| anyhow::anyhow!("JavaScript evaluation failed: {error}"))?;
-        self.context
-            .run_jobs()
+        catch_unwind(AssertUnwindSafe(|| self.context.run_jobs()))
+            .map_err(|panic| anyhow::anyhow!("JavaScript jobs panicked: {}", panic_message(panic)))?
             .map_err(|error| anyhow::anyhow!("JavaScript jobs failed: {error}"))?;
         Ok(())
     }
 
     fn execute_module(&mut self, path: &Path, source: &str) -> Result<()> {
         let source = normalize_three_compatibility_source(source);
-        let module = Module::parse(
-            Source::from_bytes(source.as_ref()).with_path(path),
-            None,
-            &mut self.context,
-        )
+        let module = catch_unwind(AssertUnwindSafe(|| {
+            Module::parse(
+                Source::from_bytes(source.as_ref()).with_path(path),
+                None,
+                &mut self.context,
+            )
+        }))
+        .map_err(|panic| {
+            anyhow::anyhow!("JavaScript module parse panicked: {}", panic_message(panic))
+        })?
         .map_err(|error| anyhow::anyhow!("JavaScript module parse failed: {error}"))?;
-        let promise = module.load_link_evaluate(&mut self.context);
-        self.context
-            .run_jobs()
+        let promise = catch_unwind(AssertUnwindSafe(|| {
+            module.load_link_evaluate(&mut self.context)
+        }))
+        .map_err(|panic| {
+            anyhow::anyhow!(
+                "JavaScript module evaluation panicked: {}",
+                panic_message(panic)
+            )
+        })?;
+        catch_unwind(AssertUnwindSafe(|| self.context.run_jobs()))
+            .map_err(|panic| {
+                anyhow::anyhow!("JavaScript module jobs panicked: {}", panic_message(panic))
+            })?
             .map_err(|error| anyhow::anyhow!("JavaScript module jobs failed: {error}"))?;
         match promise.state() {
             PromiseState::Fulfilled(_) => Ok(()),
@@ -946,6 +1053,16 @@ impl JsRuntime {
             "if (typeof globalThis.HyperThreeGame !== 'undefined' && typeof globalThis.HyperThreeGame.{callback} === 'function') globalThis.HyperThreeGame.{callback}();"
         );
         self.execute_source(&source)
+    }
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
     }
 }
 
@@ -1669,6 +1786,33 @@ mod tests {
         let snapshot = render_state.lock().unwrap().snapshot();
         assert!(snapshot.cubes[0].position[0] > 0.0);
         assert_eq!(snapshot.cubes[0].position[1], 0.0);
+    }
+
+    #[test]
+    fn fetch_returns_project_relative_asset_arraybuffer() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__fetchProbe = false;
+                fetch("Cargo.toml")
+                  .then(async (response) => {
+                    const buffer = await response.arrayBuffer();
+                    const bytes = new Uint8Array(buffer);
+                    return response.ok && response.status === 200 && bytes[0] === 91;
+                  })
+                  .then((result) => { globalThis.__fetchProbe = result; });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source(
+                "if (globalThis.__fetchProbe !== true) throw new Error('fetch probe failed');",
+            )
+            .unwrap();
     }
 
     #[test]

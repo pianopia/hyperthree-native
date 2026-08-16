@@ -28,12 +28,15 @@
 - [x] Native pipeline-derived bind group layouts and GPU buffer/texture copy commands
 - [x] WebGPU texture arrays, mip/sample descriptors, view descriptors, and typed upload layout
 - [x] Initial GPUCanvasContext and native swapchain presentation path
+- [x] Project-relative fetch/Request/Response/Headers and ArrayBuffer/TextDecoder asset boundary
 - [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
 - [x] Three.js 0.179 AnimationMixer transform and morph-target shader smoke on native Metal
 - [x] Three.js 0.179 SkinnedMesh/Skeleton and bone-transform AnimationMixer smoke on native Metal
+- [x] Three.js 0.179 MeshStandardNodeMaterial, TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
+- [ ] GLTFLoader execution on embedded runtime (Boa currently panics while evaluating its large module; V8/Boa fix required)
 - [ ] glTF/KTX2 zero-copy texture decode, full skin joint animation paths, and material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
