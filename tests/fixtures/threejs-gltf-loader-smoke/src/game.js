@@ -99,6 +99,9 @@ globalThis.__gltfQuerySmoke = false;
 globalThis.__gltfRenderBundleSmoke = false;
 globalThis.__gltfClearBufferSmoke = false;
 globalThis.__gltfBufferTextureSmoke = false;
+globalThis.__gltfDeviceLimitsSmoke = false;
+globalThis.__gltfQueueSyncSmoke = false;
+globalThis.__gltfComputeSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -110,12 +113,44 @@ globalThis.__gltfSmokeStage = "before-adapter";
 navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfSmokeStage = "after-adapter";
   const device = await adapter.requestDevice();
+  globalThis.__gltfDeviceLimitsSmoke = adapter.limits.maxTextureDimension2D > 0 &&
+    device.limits.maxComputeWorkgroupsPerDimension > 0;
   const sourceBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const readbackBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   device.queue.writeBuffer(sourceBuffer, 0, new Uint8Array([7, 11, 13, 17]));
   const readbackEncoder = device.createCommandEncoder();
   readbackEncoder.copyBufferToBuffer(sourceBuffer, 0, readbackBuffer, 0, 4);
   device.queue.submit([readbackEncoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
+  globalThis.__gltfQueueSyncSmoke = true;
+  const computeStorage = device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  const computeReadback = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const computeShader = device.createShaderModule({ code: `
+    @group(0) @binding(0) var<storage, read_write> data: array<u32>;
+    @compute @workgroup_size(1) fn main() { data[0] = 123u; }
+  ` });
+  const computePipeline = device.createComputePipeline({
+    layout: "auto",
+    compute: { module: computeShader, entryPoint: "main" },
+  });
+  const computeBindGroup = device.createBindGroup({
+    layout: computePipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: computeStorage } }],
+  });
+  const computeEncoder = device.createCommandEncoder();
+  const computePass = computeEncoder.beginComputePass();
+  computePass.setPipeline(computePipeline);
+  computePass.setBindGroup(0, computeBindGroup);
+  computePass.dispatchWorkgroups(1);
+  computePass.end();
+  computeEncoder.copyBufferToBuffer(computeStorage, 0, computeReadback, 0, 4);
+  device.queue.submit([computeEncoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
+  await computeReadback.mapAsync(GPUMapMode.READ);
+  globalThis.__gltfComputeSmoke = new Uint32Array(computeReadback.getMappedRange())[0] === 123;
+  computeReadback.unmap();
+  computeReadback.destroy();
+  computeStorage.destroy();
   await readbackBuffer.mapAsync(GPUMapMode.READ);
   const readbackBytes = new Uint8Array(readbackBuffer.getMappedRange());
   globalThis.__gltfReadbackSmoke = readbackBytes[0] === 7 && readbackBytes[1] === 11 && readbackBytes[2] === 13 && readbackBytes[3] === 17;
@@ -420,6 +455,8 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
+      !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
+      !globalThis.__gltfComputeSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

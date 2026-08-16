@@ -371,6 +371,50 @@ impl NativeWebGpuContext {
         features
     }
 
+    fn webgpu_limits(&self) -> Value {
+        let limits = self.device.limits();
+        serde_json::json!({
+            "maxTextureDimension1D": limits.max_texture_dimension_1d,
+            "maxTextureDimension2D": limits.max_texture_dimension_2d,
+            "maxTextureDimension3D": limits.max_texture_dimension_3d,
+            "maxTextureArrayLayers": limits.max_texture_array_layers,
+            "maxBindGroups": limits.max_bind_groups,
+            "maxBindingsPerBindGroup": limits.max_bindings_per_bind_group,
+            "maxDynamicUniformBuffersPerPipelineLayout": limits.max_dynamic_uniform_buffers_per_pipeline_layout,
+            "maxDynamicStorageBuffersPerPipelineLayout": limits.max_dynamic_storage_buffers_per_pipeline_layout,
+            "maxSampledTexturesPerShaderStage": limits.max_sampled_textures_per_shader_stage,
+            "maxSamplersPerShaderStage": limits.max_samplers_per_shader_stage,
+            "maxStorageBuffersPerShaderStage": limits.max_storage_buffers_per_shader_stage,
+            "maxStorageTexturesPerShaderStage": limits.max_storage_textures_per_shader_stage,
+            "maxUniformBuffersPerShaderStage": limits.max_uniform_buffers_per_shader_stage,
+            "maxUniformBufferBindingSize": limits.max_uniform_buffer_binding_size,
+            "maxStorageBufferBindingSize": limits.max_storage_buffer_binding_size,
+            "maxVertexBuffers": limits.max_vertex_buffers,
+            "maxBufferSize": limits.max_buffer_size,
+            "maxVertexAttributes": limits.max_vertex_attributes,
+            "maxVertexBufferArrayStride": limits.max_vertex_buffer_array_stride,
+            "minUniformBufferOffsetAlignment": limits.min_uniform_buffer_offset_alignment,
+            "minStorageBufferOffsetAlignment": limits.min_storage_buffer_offset_alignment,
+            "maxInterStageShaderComponents": limits.max_inter_stage_shader_components,
+            "maxColorAttachments": limits.max_color_attachments,
+            "maxColorAttachmentBytesPerSample": limits.max_color_attachment_bytes_per_sample,
+            "maxComputeWorkgroupStorageSize": limits.max_compute_workgroup_storage_size,
+            "maxComputeInvocationsPerWorkgroup": limits.max_compute_invocations_per_workgroup,
+            "maxComputeWorkgroupSizeX": limits.max_compute_workgroup_size_x,
+            "maxComputeWorkgroupSizeY": limits.max_compute_workgroup_size_y,
+            "maxComputeWorkgroupSizeZ": limits.max_compute_workgroup_size_z,
+            "maxComputeWorkgroupsPerDimension": limits.max_compute_workgroups_per_dimension,
+            "minSubgroupSize": limits.min_subgroup_size,
+            "maxSubgroupSize": limits.max_subgroup_size,
+            "maxPushConstantSize": limits.max_push_constant_size,
+            "maxNonSamplerBindings": limits.max_non_sampler_bindings,
+        })
+    }
+
+    fn wait_for_submitted_work(&self) {
+        self.device.poll(wgpu::Maintain::Wait);
+    }
+
     /// Returns the native loss record after wgpu has reported a device loss.
     /// The JS `GPUDevice.lost` promise uses the same record; the host uses it
     /// to stop before submitting more work to an invalid device.
@@ -2666,7 +2710,7 @@ pub fn register_bindings(
         },
     )?;
 
-    let submit_gpu = gpu;
+    let submit_gpu = gpu.clone();
     register(
         context,
         "__hyperthreeWebGpuSubmit",
@@ -2692,7 +2736,22 @@ pub fn register_bindings(
         },
     )?;
 
-    let bootstrap = WEBGPU_BOOTSTRAP.replace("__HYPERTHREE_FEATURES__", &feature_names);
+    let wait_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuWaitForSubmittedWork",
+        0,
+        move |_this, _args, _context| {
+            wait_gpu.wait_for_submitted_work();
+            Ok(JsValue::undefined())
+        },
+    )?;
+
+    let limits = serde_json::to_string(&gpu.webgpu_limits())
+        .map_err(|error| anyhow::anyhow!("failed to serialize WebGPU limits: {error}"))?;
+    let bootstrap = WEBGPU_BOOTSTRAP
+        .replace("__HYPERTHREE_FEATURES__", &feature_names)
+        .replace("__HYPERTHREE_LIMITS__", &limits);
     context
         .eval(boa_engine::Source::from_bytes(bootstrap.as_bytes()))
         .map(|_| ())
@@ -4346,12 +4405,12 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         );
       },
       submit(commandBuffers) { __hyperthreeWebGpuSubmit(JSON.stringify((commandBuffers ?? []).map(handleId))); },
-      onSubmittedWorkDone: async () => {},
+      onSubmittedWorkDone: async () => { __hyperthreeWebGpuWaitForSubmittedWork(); },
     };
     const device = {
       queue,
       features: new Set([__HYPERTHREE_FEATURES__]),
-      limits: {},
+      limits: __HYPERTHREE_LIMITS__,
       createBuffer: makeBuffer,
       createTexture: makeTexture,
       createShaderModule(descriptor = {}) {
@@ -4555,7 +4614,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   const adapter = {
     name: 'HyperThree Native wgpu',
     features: new Set([__HYPERTHREE_FEATURES__]),
-    limits: {},
+    limits: __HYPERTHREE_LIMITS__,
     isFallbackAdapter: false,
     requestDevice: async () => makeDevice(),
   };

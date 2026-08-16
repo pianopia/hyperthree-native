@@ -87,6 +87,10 @@ shadow、equirectangular environment、MRT、indirect drawとそのGPU readback�
 `endOcclusionQuery()`、`resolveQuerySet()`とMAP_READ readbackもnative wgpuへ接続した。
 `GPUCommandEncoder.clearBuffer()`、`copyBufferToTexture()`、`GPUQueue.writeBuffer()`の
 dataOffset/size、`writeTexture()`のdataLayout.offsetもnative wgpuコマンドへ接続した。
+Adapter/Deviceの実GPU limitsを`GPUSupportedLimits`互換のcamelCaseで公開し、
+`GPUQueue.onSubmittedWorkDone()`はwgpuの`Maintain::Wait`で実際のsubmit完了を待つ。
+storage bufferをComputePassで更新し、別のGPUBufferへcopyしてMAP_READするnative
+dispatch経路もfixtureで検証している。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。
