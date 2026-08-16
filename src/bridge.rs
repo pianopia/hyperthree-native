@@ -82,12 +82,24 @@ impl GeometryRegistry {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum CameraProjection {
+    Perspective,
+    Orthographic {
+        left: f64,
+        right: f64,
+        top: f64,
+        bottom: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct CameraSnapshot {
     pub position: [f64; 3],
     pub target: [f64; 3],
     pub fov_y_degrees: f64,
     pub near: f64,
     pub far: f64,
+    pub projection: CameraProjection,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +193,7 @@ impl Default for NativeRenderState {
                 fov_y_degrees: 60.0,
                 near: 0.1,
                 far: 100.0,
+                projection: CameraProjection::Perspective,
             },
             geometry_registry: GeometryRegistry::shared(),
         }
@@ -324,6 +337,36 @@ impl NativeRenderState {
             fov_y_degrees: fov_y_degrees.clamp(1.0, 179.0),
             near,
             far: far.max(near + 0.01),
+            projection: CameraProjection::Perspective,
+        };
+    }
+
+    pub fn set_orthographic_camera(
+        &mut self,
+        position: [f64; 3],
+        target: [f64; 3],
+        bounds: [f64; 4],
+        near: f64,
+        far: f64,
+    ) {
+        let [left, right, top, bottom] = bounds;
+        let left = left.min(right - 0.001);
+        let right = right.max(left + 0.001);
+        let bottom = bottom.min(top - 0.001);
+        let top = top.max(bottom + 0.001);
+        let near = near.max(0.001);
+        self.camera = CameraSnapshot {
+            position,
+            target,
+            fov_y_degrees: 60.0,
+            near,
+            far: far.max(near + 0.01),
+            projection: CameraProjection::Orthographic {
+                left,
+                right,
+                top,
+                bottom,
+            },
         };
     }
 }

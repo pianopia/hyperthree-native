@@ -8,6 +8,7 @@
 - [ ] macOS Metal, Windows DirectX 12/Vulkan, Linux Vulkan/software CI matrix
 - [x] Cross-platform CI skeleton and headless GPU backend diagnostics
 - [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
+- [x] Native mouse position/button input and perspective/orthographic camera sync
 - [x] Project-relative mmap asset API and glTF/GLB metadata inspection
 - [x] Native glTF/GLB POSITION/index decode and cached GPU geometry upload
 - [x] Boa ES module execution with relative and `node_modules` resolution

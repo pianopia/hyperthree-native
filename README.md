@@ -95,3 +95,6 @@ Vite導線も引き続き利用できます。
 ゲームをそのまま動かすには、テクスチャ・マテリアル、DOM/WebGPU API
 バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
 完全な直接VRAM転送を引き続き実装する必要があります。
+
+入力は`isKeyDown()`、`isMouseButtonDown()`、`getMousePosition()`から取得でき、
+PerspectiveCameraとOrthographicCameraの両方を同期できます。

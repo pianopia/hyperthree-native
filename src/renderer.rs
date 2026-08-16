@@ -1,4 +1,6 @@
-use crate::bridge::{CameraSnapshot, GeometryData, GeometryKind, SharedRenderState};
+use crate::bridge::{
+    CameraProjection, CameraSnapshot, GeometryData, GeometryKind, SharedRenderState,
+};
 use anyhow::{Context as _, Result};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -204,7 +206,7 @@ impl Renderer {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -602,12 +604,27 @@ fn build_mvp_values(
             z: 0.0,
         },
     );
-    let projection = perspective(
-        (camera.fov_y_degrees as f32).to_radians(),
-        aspect,
-        camera.near as f32,
-        camera.far as f32,
-    );
+    let projection = match camera.projection {
+        CameraProjection::Perspective => perspective(
+            (camera.fov_y_degrees as f32).to_radians(),
+            aspect,
+            camera.near as f32,
+            camera.far as f32,
+        ),
+        CameraProjection::Orthographic {
+            left,
+            right,
+            top,
+            bottom,
+        } => orthographic(
+            left as f32,
+            right as f32,
+            bottom as f32,
+            top as f32,
+            camera.near as f32,
+            camera.far as f32,
+        ),
+    };
     let model = mat_mul(
         &translation(vec3(position)),
         &mat_mul(
@@ -727,5 +744,26 @@ fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
         [0.0, focal, 0.0, 0.0],
         [0.0, 0.0, far / (near - far), -1.0],
         [0.0, 0.0, (far * near) / (near - far), 0.0],
+    ]
+}
+
+fn orthographic(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    near: f32,
+    far: f32,
+) -> [[f32; 4]; 4] {
+    [
+        [2.0 / (right - left), 0.0, 0.0, 0.0],
+        [0.0, 2.0 / (top - bottom), 0.0, 0.0],
+        [0.0, 0.0, 1.0 / (near - far), 0.0],
+        [
+            -(right + left) / (right - left),
+            -(top + bottom) / (top - bottom),
+            near / (near - far),
+            1.0,
+        ],
     ]
 }

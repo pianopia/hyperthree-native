@@ -22,6 +22,11 @@ globalThis.HyperThreeNative = {
   setCamera(px, py, pz, tx, ty, tz, fovY, near, far) {
     __hyperthreeSetCamera(px, py, pz, tx, ty, tz, fovY, near, far);
   },
+  setOrthographicCamera(px, py, pz, tx, ty, tz, left, right, top, bottom, near, far) {
+    __hyperthreeSetOrthographicCamera(
+      px, py, pz, tx, ty, tz, left, right, top, bottom, near, far,
+    );
+  },
   isKeyDown(code) {
     return __hyperthreeIsKeyDown(code);
   },
@@ -76,17 +81,39 @@ globalThis.HyperThreeNative = {
       const direction = elements
         ? [-elements[8], -elements[9], -elements[10]]
         : [0, 0, -1];
-      HyperThreeNative.setCamera(
-        position.x,
-        position.y,
-        position.z,
+      const target = [
         position.x + direction[0],
         position.y + direction[1],
         position.z + direction[2],
-        camera.fov ?? 60,
-        camera.near ?? 0.1,
-        camera.far ?? 100,
-      );
+      ];
+      if (camera.isOrthographicCamera || camera.type === "OrthographicCamera") {
+        HyperThreeNative.setOrthographicCamera(
+          position.x,
+          position.y,
+          position.z,
+          target[0],
+          target[1],
+          target[2],
+          camera.left ?? -1,
+          camera.right ?? 1,
+          camera.top ?? 1,
+          camera.bottom ?? -1,
+          camera.near ?? 0.1,
+          camera.far ?? 100,
+        );
+      } else {
+        HyperThreeNative.setCamera(
+          position.x,
+          position.y,
+          position.z,
+          target[0],
+          target[1],
+          target[2],
+          camera.fov ?? 60,
+          camera.near ?? 0.1,
+          camera.far ?? 100,
+        );
+      }
     }
 
     HyperThreeNative.beginFrame();

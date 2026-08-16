@@ -319,6 +319,49 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register camera binding: {error}"))?;
 
+        let orthographic_camera_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeSetOrthographicCamera"),
+                12,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let position = [
+                            number_arg(args, 0, context)?,
+                            number_arg(args, 1, context)?,
+                            number_arg(args, 2, context)?,
+                        ];
+                        let target = [
+                            number_arg(args, 3, context)?,
+                            number_arg(args, 4, context)?,
+                            number_arg(args, 5, context)?,
+                        ];
+                        let left = number_arg(args, 6, context)?;
+                        let right = number_arg(args, 7, context)?;
+                        let top = number_arg(args, 8, context)?;
+                        let bottom = number_arg(args, 9, context)?;
+                        let near = number_arg(args, 10, context)?;
+                        let far = number_arg(args, 11, context)?;
+                        orthographic_camera_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .set_orthographic_camera(
+                                position,
+                                target,
+                                [left, right, top, bottom],
+                                near,
+                                far,
+                            );
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register orthographic camera binding: {error}")
+            })?;
+
         let key_input_state = input_state.clone();
         context
             .register_global_builtin_callable(js_string!("__hyperthreeIsKeyDown"), 1, unsafe {
@@ -907,6 +950,41 @@ mod tests {
         assert_eq!(snapshot.cubes[0].position, [1.0, 2.0, 3.0]);
         assert_eq!(snapshot.cubes[0].scale, [2.0, 3.0, 4.0]);
         assert_eq!(snapshot.camera.target, [0.0, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn three_scene_sync_supports_orthographic_cameras() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(include_str!("../js/three-bridge.js"))
+            .unwrap();
+        runtime
+            .execute_source(
+                r#"
+                const scene = { updateMatrixWorld() {}, traverse() {} };
+                const camera = {
+                  type: "OrthographicCamera",
+                  isOrthographicCamera: true,
+                  position: { x: 0, y: 0, z: 4 },
+                  matrixWorld: { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 4, 1] },
+                  left: -4, right: 4, top: 3, bottom: -3, near: 0.1, far: 100,
+                  updateMatrixWorld() {},
+                };
+                globalThis.HyperThreeGame = {
+                  update() { HyperThreeNative.syncThreeScene(scene, camera); },
+                };
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert!(matches!(
+            snapshot.camera.projection,
+            crate::bridge::CameraProjection::Orthographic { .. }
+        ));
     }
 
     #[test]
