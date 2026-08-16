@@ -14,15 +14,16 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 use js_runtime::JsRuntime;
 use project::Manifest;
 use renderer::Renderer;
+use serde_json::json;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
 };
 use winit::{
-    event::{Event, MouseButton, WindowEvent},
+    event::{Event, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    keyboard::PhysicalKey,
+    keyboard::{ModifiersState, PhysicalKey},
     window::WindowBuilder,
 };
 
@@ -104,6 +105,7 @@ struct GameHost {
     render_state: bridge::SharedRenderState,
     input_state: bridge::SharedInputState,
     restart_count: u32,
+    modifiers: ModifiersState,
 }
 
 impl GameHost {
@@ -157,6 +159,7 @@ impl GameHost {
             render_state,
             input_state,
             restart_count: 0,
+            modifiers: ModifiersState::default(),
         })
     }
 
@@ -295,28 +298,184 @@ fn run_native(
                             .lock()
                             .expect("input state mutex should not be poisoned")
                             .clear();
+                        host.modifiers = ModifiersState::default();
+                        dispatch_input_event(&mut host, "blur", json!({}));
                     }
                     WindowEvent::KeyboardInput { event, .. } => {
-                        if let PhysicalKey::Code(code) = event.physical_key {
+                        let physical_key = event.physical_key;
+                        let code = format!("{physical_key:?}");
+                        if let PhysicalKey::Code(code) = physical_key {
                             input_state
                                 .lock()
                                 .expect("input state mutex should not be poisoned")
                                 .set_key(format!("{code:?}"), event.state.is_pressed());
                         }
+                        let key = event
+                            .logical_key
+                            .to_text()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("{:?}", event.logical_key));
+                        let text = event.text.map(|text| text.to_string());
+                        let event_type = if event.state.is_pressed() {
+                            "keydown"
+                        } else {
+                            "keyup"
+                        };
+                        let modifiers = host.modifiers;
+                        dispatch_input_event(
+                            &mut host,
+                            event_type,
+                            json!({
+                                "key": key,
+                                "code": code,
+                                "repeat": event.repeat,
+                                "text": text,
+                                "ctrlKey": modifiers.control_key(),
+                                "shiftKey": modifiers.shift_key(),
+                                "altKey": modifiers.alt_key(),
+                                "metaKey": modifiers.super_key(),
+                            }),
+                        );
+                    }
+                    WindowEvent::ModifiersChanged(modifiers) => {
+                        host.modifiers = modifiers.state();
                     }
                     WindowEvent::CursorMoved { position, .. } => {
-                        input_state
-                            .lock()
-                            .expect("input state mutex should not be poisoned")
-                            .set_mouse_position(position.x, position.y);
+                        let (previous, buttons) = {
+                            let mut input = input_state
+                                .lock()
+                                .expect("input state mutex should not be poisoned");
+                            let previous = input.mouse_position();
+                            input.set_mouse_position(position.x, position.y);
+                            (previous, input.mouse_buttons_mask())
+                        };
+                        let init = json!({
+                            "clientX": position.x,
+                            "clientY": position.y,
+                            "movementX": position.x - previous[0],
+                            "movementY": position.y - previous[1],
+                            "buttons": buttons,
+                            "button": -1,
+                            "pointerId": 1,
+                            "pointerType": "mouse",
+                            "isPrimary": true,
+                            "ctrlKey": host.modifiers.control_key(),
+                            "shiftKey": host.modifiers.shift_key(),
+                            "altKey": host.modifiers.alt_key(),
+                            "metaKey": host.modifiers.super_key(),
+                        });
+                        dispatch_input_event(&mut host, "mousemove", init.clone());
+                        dispatch_input_event(&mut host, "pointermove", init);
                     }
                     WindowEvent::MouseInput { state, button, .. } => {
                         if let Some(button) = mouse_button_id(button) {
-                            input_state
-                                .lock()
-                                .expect("input state mutex should not be poisoned")
-                                .set_mouse_button(button, state.is_pressed());
+                            let (position, buttons) = {
+                                let mut input = input_state
+                                    .lock()
+                                    .expect("input state mutex should not be poisoned");
+                                input.set_mouse_button(button, state.is_pressed());
+                                (input.mouse_position(), input.mouse_buttons_mask())
+                            };
+                            let init = json!({
+                                "clientX": position[0],
+                                "clientY": position[1],
+                                "button": button,
+                                "buttons": buttons,
+                                "pointerId": 1,
+                                "pointerType": "mouse",
+                                "isPrimary": true,
+                                "ctrlKey": host.modifiers.control_key(),
+                                "shiftKey": host.modifiers.shift_key(),
+                                "altKey": host.modifiers.alt_key(),
+                                "metaKey": host.modifiers.super_key(),
+                            });
+                            let event_type = if state.is_pressed() {
+                                "mousedown"
+                            } else {
+                                "mouseup"
+                            };
+                            let pointer_event_type = if state.is_pressed() {
+                                "pointerdown"
+                            } else {
+                                "pointerup"
+                            };
+                            dispatch_input_event(&mut host, event_type, init.clone());
+                            dispatch_input_event(&mut host, pointer_event_type, init.clone());
+                            if !state.is_pressed() && button == 0 {
+                                dispatch_input_event(&mut host, "click", init);
+                            }
                         }
+                    }
+                    WindowEvent::CursorEntered { .. } => {
+                        dispatch_input_event(&mut host, "mouseenter", json!({}));
+                        dispatch_input_event(
+                            &mut host,
+                            "pointerenter",
+                            json!({
+                                "pointerId": 1,
+                                "pointerType": "mouse",
+                                "isPrimary": true,
+                            }),
+                        );
+                    }
+                    WindowEvent::CursorLeft { .. } => {
+                        dispatch_input_event(&mut host, "mouseleave", json!({}));
+                        dispatch_input_event(
+                            &mut host,
+                            "pointerleave",
+                            json!({
+                                "pointerId": 1,
+                                "pointerType": "mouse",
+                                "isPrimary": true,
+                            }),
+                        );
+                    }
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        let (delta_x, delta_y, delta_mode) = match delta {
+                            MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64, 1),
+                            MouseScrollDelta::PixelDelta(delta) => (delta.x, delta.y, 0),
+                        };
+                        let position = input_state
+                            .lock()
+                            .expect("input state mutex should not be poisoned")
+                            .mouse_position();
+                        let modifiers = host.modifiers;
+                        dispatch_input_event(
+                            &mut host,
+                            "wheel",
+                            json!({
+                                "clientX": position[0],
+                                "clientY": position[1],
+                                "deltaX": delta_x,
+                                "deltaY": delta_y,
+                                "deltaZ": 0,
+                                "deltaMode": delta_mode,
+                                "ctrlKey": modifiers.control_key(),
+                                "shiftKey": modifiers.shift_key(),
+                                "altKey": modifiers.alt_key(),
+                                "metaKey": modifiers.super_key(),
+                            }),
+                        );
+                    }
+                    WindowEvent::Touch(touch) => {
+                        let (event_type, pointer_event_type) = match touch.phase {
+                            TouchPhase::Started => ("touchstart", "pointerdown"),
+                            TouchPhase::Moved => ("touchmove", "pointermove"),
+                            TouchPhase::Ended => ("touchend", "pointerup"),
+                            TouchPhase::Cancelled => ("touchcancel", "pointercancel"),
+                        };
+                        let init = json!({
+                            "clientX": touch.location.x,
+                            "clientY": touch.location.y,
+                            "pageX": touch.location.x,
+                            "pageY": touch.location.y,
+                            "pointerId": touch.id,
+                            "pointerType": "touch",
+                            "isPrimary": true,
+                            "pressure": touch.force.map(|_| 1.0).unwrap_or(0.5),
+                        });
+                        dispatch_input_event(&mut host, event_type, init.clone());
+                        dispatch_input_event(&mut host, pointer_event_type, init);
                     }
                     WindowEvent::RedrawRequested => {
                         if host
@@ -376,6 +535,12 @@ fn run_native(
         }
     })?;
     Ok(())
+}
+
+fn dispatch_input_event(host: &mut GameHost, event_type: &str, init: serde_json::Value) {
+    if let Err(error) = host.runtime_mut().dispatch_input_event(event_type, &init) {
+        log::error!("JavaScript {event_type} event failed: {error:#}");
+    }
 }
 
 fn mouse_button_id(button: MouseButton) -> Option<u8> {

@@ -1661,6 +1661,12 @@ impl JsRuntime {
                   for (const listener of globalThis.__hyperthreeEventListeners.get(event.type) || []) listener.call(globalThis, event);
                   return !event.defaultPrevented;
                 };
+                globalThis.__hyperthreeDispatchInputEvent = (type, init = {}) => {
+                  const event = Object.assign(new Event(type, { bubbles: true, cancelable: true }), init);
+                  event.target = globalThis.__hyperthreeNativeCanvas || globalThis;
+                  event.currentTarget = globalThis;
+                  return globalThis.dispatchEvent(event);
+                };
                 globalThis.console = globalThis.console || {
                   log() {},
                   info() {},
@@ -2354,6 +2360,18 @@ impl JsRuntime {
         let height = height.max(1);
         self.execute_source(&format!(
             "globalThis.window.innerWidth={width}; globalThis.window.innerHeight={height}; globalThis.__hyperthreeNativeCanvas.clientWidth={width}; globalThis.__hyperthreeNativeCanvas.clientHeight={height}; globalThis.dispatchEvent(new Event('resize'));"
+        ))
+    }
+
+    pub fn dispatch_input_event(
+        &mut self,
+        event_type: &str,
+        init: &serde_json::Value,
+    ) -> Result<()> {
+        let event_type = serde_json::to_string(event_type)?;
+        let init = serde_json::to_string(init)?;
+        self.execute_source(&format!(
+            "globalThis.__hyperthreeDispatchInputEvent({event_type}, {init});"
         ))
     }
 
@@ -3840,6 +3858,40 @@ mod tests {
         let snapshot = render_state.lock().unwrap().snapshot();
         assert_eq!(snapshot.cubes[0].position, [12.0, 24.0, 0.0]);
         assert_eq!(snapshot.cubes[0].color[0], 1.0);
+    }
+
+    #[test]
+    fn dispatches_native_input_events_to_window_listeners() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__inputEventSmoke = null;
+                addEventListener('pointermove', (event) => {
+                  globalThis.__inputEventSmoke = [event.clientX, event.clientY, event.pointerType, event.buttons];
+                });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .dispatch_input_event(
+                "pointermove",
+                &serde_json::json!({
+                    "clientX": 32,
+                    "clientY": 48,
+                    "pointerType": "mouse",
+                    "buttons": 1,
+                }),
+            )
+            .unwrap();
+        runtime
+            .execute_source(
+                "if (JSON.stringify(globalThis.__inputEventSmoke) !== '[32,48,\"mouse\",1]') throw new Error('input event payload mismatch');",
+            )
+            .unwrap();
     }
 
     #[test]

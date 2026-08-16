@@ -331,6 +331,16 @@ impl NativeInputState {
         self.mouse_buttons.contains(&button)
     }
 
+    pub fn mouse_buttons_mask(&self) -> u16 {
+        self.mouse_buttons.iter().fold(0u16, |mask, button| {
+            if *button < 16 {
+                mask | (1u16 << button)
+            } else {
+                mask
+            }
+        })
+    }
+
     pub fn set_mouse_position(&mut self, x: f64, y: f64) {
         self.mouse_position = [x, y];
     }
