@@ -31,6 +31,13 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 cargo run --manifest-path <repo-root>/Cargo.toml
 ```
 
+GPUドライバとOS別バックエンドの確認には、ウィンドウを開かない診断コマンド
+を使います。
+
+```bash
+cargo run --manifest-path <repo-root>/Cargo.toml -- diagnostics
+```
+
 起動すると `js/game.js` を評価したあと、ネイティブウィンドウを開きます。
 wgpu の直接描画で三角形が表示されれば、イベントループ・GPUサーフェス・描画
 パイプラインが接続されています。
@@ -49,12 +56,14 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 - `src/renderer.rs`: wgpu のネイティブサーフェスと描画パイプライン
 - `src/asset.rs`: mmap ベースのアセット読み込み
 - `src/bridge.rs`: JavaScriptからネイティブ描画状態へ渡す共有ブリッジ
+- `src/platform.rs`: OS・GPUバックエンド診断
 - `src/project.rs`: `hyperthree.toml`、雛形生成、npmビルド導線
 - `js/`: Three.js 互換層へ接続するゲームエントリーポイント
 - `docs/architecture.md`: 仕様書の各項目と実装状況
 - `docs/platform-support.md`: macOS / Windows / Linux対応計画
 - `docs/commerce-connect-plan.md`: Stripe Connect販売・手数料・振込・管理画面計画
 - `docs/roadmap.md`: ランタイムとコマースの全体ロードマップ
+- `.github/workflows/ci.yml`: macOS / Windows / LinuxのCI
 
 現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
 `HyperThreeNative.setClearColor()` / `setTriangleColor()`で描画状態を変更する

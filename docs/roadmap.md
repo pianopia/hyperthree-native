@@ -6,6 +6,7 @@
 - [x] AI-friendly project manifest and Vite bundle import path
 - [x] JavaScript-to-native clear-color/triangle-color bridge
 - [ ] macOS Metal, Windows DirectX 12/Vulkan, Linux Vulkan/software CI matrix
+- [x] Cross-platform CI skeleton and headless GPU backend diagnostics
 - [ ] Native input, audio, clock, filesystem, and lifecycle APIs
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [ ] Three.js WebGPU renderer bindings

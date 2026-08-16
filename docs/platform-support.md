@@ -39,7 +39,10 @@ GitHub Actions should run at least:
 - A separate packaging job: produce checksums and attach artifacts only from
   tagged releases.
 
+The first workflow is `.github/workflows/ci.yml`. It runs formatting, tests,
+Clippy, release compilation, and the headless `cargo run -- diagnostics` probe
+on all three OS families.
+
 GPU screenshot tests should be tolerant of vendor-specific pixels. The first
 gate is successful frame submission plus a small set of semantic render-state
 assertions; image snapshots come after the renderer is deterministic enough.
-

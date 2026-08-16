@@ -1,6 +1,7 @@
 mod asset;
 mod bridge;
 mod js_runtime;
+mod platform;
 mod project;
 mod renderer;
 
@@ -39,6 +40,8 @@ enum Command {
     Build(BuildArgs),
     /// Build when needed and launch the project in the native host.
     Run(RunArgs),
+    /// Print host and visible GPU backend diagnostics without opening a window.
+    Diagnostics,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -177,6 +180,7 @@ fn main() -> Result<()> {
             );
             run_native(script, None, Some(manifest))
         }
+        Some(Command::Diagnostics) => platform::print_diagnostics(),
         None => run_native(project_path(cli.script), cli.asset.map(project_path), None),
     }
 }
