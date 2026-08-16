@@ -126,7 +126,10 @@ embedded buffer、GLB、外部buffer、PNG画像テクスチャ、Meshopt圧縮g
 binding、raw KTX2のmip/face転送、Khronos公式Boxを使った標準`GLTFLoader`/`DRACOLoader`
 経由のnative Draco decodeまでfixture検証済みです。UASTCはRGBA32/BC7のtarget fixtureまで
 検証済みで、ASTC/BC3/BC1/ETC2のGPUバックエンド別matrix、Dracoの属性・point cloud・standalone
-API網羅、その他の標準Web API互換性は継続対応します。
+API網羅、その他の標準Web API互換性は継続対応します。RGBA画像を使う
+`HTMLVideoElement`の連続フレーム境界と、2フレームGIFの遅延時間・`requestVideoFrameCallback()`・
+`VideoTexture`利用経路も同じThree.js WebGPU fixtureで検証済みです。H.264/VP9/AV1等の動画codec、
+動画音声トラック、ランダムシーク、OS hardware decoder接続は未実装の残タスクです。
 
 Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階計画は
 [`docs/threejs-compatibility-architecture.md`](docs/threejs-compatibility-architecture.md)

@@ -130,7 +130,7 @@ JavaScriptへ持ち込むものではない。native decoderと連続frame sched
 `play()`/`pause()`、`currentFrame`へ接続し、`requestVideoFrameCallback()`を同じRAF時計で
 配送する。GIFについては全フレームをnativeで合成デコードし、各フレームの遅延時間から
 `currentTime`とループ／終了を進めるため、Three.jsの`VideoTexture`が使う連続frame契約まで
-native decoder testで固定している。一方、H.264/VP9/AV1等の動画codec、音声トラック、ランダムシーク、
+Three.js WebGPU互換fixtureで固定している。一方、H.264/VP9/AV1等の動画codec、音声トラック、ランダムシーク、
 OSのhardware decoder接続は、別のnative media backendの残タスクである。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ

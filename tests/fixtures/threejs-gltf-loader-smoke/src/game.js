@@ -151,6 +151,7 @@ globalThis.__gltfResourceDescriptorSmoke = false;
 globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfVideoFrameSmoke = false;
 globalThis.__gltfVideoElementSmoke = false;
+globalThis.__gltfAnimatedVideoSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfCanvasAlphaSmoke = false;
@@ -194,6 +195,27 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     videoElement.videoWidth === 1 && videoElement.videoHeight === 1 &&
     videoElement.currentFrame?.codedWidth === 1 && videoFrameCallbackSeen;
   videoElement.pause();
+  const animatedVideo = document.createElement('video');
+  let animatedBlueFrameSeen = false;
+  const observeAnimatedFrame = (_now, metadata) => {
+    const frame = animatedVideo.currentFrame;
+    if (metadata.width === 1 && metadata.height === 1 && frame?.data?.[2] === 255) {
+      animatedBlueFrameSeen = true;
+    } else {
+      animatedVideo.requestVideoFrameCallback(observeAnimatedFrame);
+    }
+  };
+  animatedVideo.requestVideoFrameCallback(observeAnimatedFrame);
+  animatedVideo.src = 'public/generated/animated.gif';
+  await animatedVideo.play();
+  await new Promise((resolve) => {
+    const check = () => animatedBlueFrameSeen ? resolve() : requestAnimationFrame(check);
+    check();
+  });
+  globalThis.__gltfAnimatedVideoSmoke = animatedBlueFrameSeen &&
+    animatedVideo.duration >= 0.1 && animatedVideo.videoWidth === 1 && animatedVideo.videoHeight === 1 &&
+    animatedVideo.currentTime > 0;
+  animatedVideo.pause();
   const externalFrame = new VideoFrame({
     width: 1,
     height: 1,
@@ -674,6 +696,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfExternalTextureSmoke ||
       !globalThis.__gltfVideoFrameSmoke ||
       !globalThis.__gltfVideoElementSmoke ||
+      !globalThis.__gltfAnimatedVideoSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke ||
       !globalThis.__gltfCanvasAlphaSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
