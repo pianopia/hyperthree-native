@@ -4,6 +4,7 @@ mod js_runtime;
 mod platform;
 mod project;
 mod renderer;
+mod webgpu;
 
 use anyhow::{Context, Result};
 use clap::{Args as ClapArgs, Parser, Subcommand};
@@ -100,7 +101,35 @@ fn run_native(
 ) -> Result<()> {
     let render_state = bridge::NativeRenderState::shared();
     let input_state = bridge::NativeInputState::shared();
-    let mut runtime = JsRuntime::new(render_state.clone(), input_state.clone(), asset_root)?;
+    let event_loop = EventLoop::new().context("failed to create native event loop")?;
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title(
+                manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.window.title.as_deref())
+                    .unwrap_or("HyperThree Native"),
+            )
+            .with_inner_size(winit::dpi::PhysicalSize::new(
+                manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.window.width)
+                    .unwrap_or(1280),
+                manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.window.height)
+                    .unwrap_or(720),
+            ))
+            .build(&event_loop)
+            .context("failed to create native window")?,
+    );
+    let mut renderer = pollster::block_on(Renderer::new(window, render_state.clone()))?;
+    let mut runtime = JsRuntime::new_with_gpu(
+        render_state.clone(),
+        input_state.clone(),
+        asset_root,
+        Some(renderer.webgpu_context()),
+    )?;
     runtime.execute_source(include_str!("../js/three-bridge.js"))?;
     runtime.execute_file(&script)?;
     runtime.execute_start()?;
@@ -128,29 +157,6 @@ fn run_native(
         let _ = asset.bytes().len();
     }
 
-    let event_loop = EventLoop::new().context("failed to create native event loop")?;
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title(
-                manifest
-                    .as_ref()
-                    .and_then(|manifest| manifest.window.title.as_deref())
-                    .unwrap_or("HyperThree Native"),
-            )
-            .with_inner_size(winit::dpi::PhysicalSize::new(
-                manifest
-                    .as_ref()
-                    .and_then(|manifest| manifest.window.width)
-                    .unwrap_or(1280),
-                manifest
-                    .as_ref()
-                    .and_then(|manifest| manifest.window.height)
-                    .unwrap_or(720),
-            ))
-            .build(&event_loop)
-            .context("failed to create native window")?,
-    );
-    let mut renderer = pollster::block_on(Renderer::new(window, render_state))?;
     let mut last_frame = Instant::now();
 
     event_loop.run(move |event, event_loop| {

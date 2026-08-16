@@ -1,6 +1,7 @@
 use crate::{
     asset::AssetStore,
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
+    webgpu::SharedNativeWebGpuContext,
 };
 use anyhow::{Context as _, Result};
 use boa_engine::{
@@ -30,10 +31,20 @@ pub struct JsRuntime {
 }
 
 impl JsRuntime {
+    #[allow(dead_code)]
     pub fn new(
         render_state: SharedRenderState,
         input_state: SharedInputState,
         asset_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        Self::new_with_gpu(render_state, input_state, asset_root, None)
+    }
+
+    pub fn new_with_gpu(
+        render_state: SharedRenderState,
+        input_state: SharedInputState,
+        asset_root: impl AsRef<Path>,
+        gpu: Option<SharedNativeWebGpuContext>,
     ) -> Result<Self> {
         let asset_root = asset_root.as_ref().to_path_buf();
         let asset_store = Arc::new(Mutex::new(AssetStore::new(&asset_root)?));
@@ -863,6 +874,7 @@ impl JsRuntime {
             .map_err(|error| {
                 anyhow::anyhow!("failed to install runtime compatibility globals: {error}")
             })?;
+        crate::webgpu::register_bindings(&mut context, gpu)?;
 
         Ok(Self { context })
     }
@@ -882,7 +894,11 @@ impl JsRuntime {
         self.context
             .eval(Source::from_bytes(source))
             .map(|_| ())
-            .map_err(|error| anyhow::anyhow!("JavaScript evaluation failed: {error}"))
+            .map_err(|error| anyhow::anyhow!("JavaScript evaluation failed: {error}"))?;
+        self.context
+            .run_jobs()
+            .map_err(|error| anyhow::anyhow!("JavaScript jobs failed: {error}"))?;
+        Ok(())
     }
 
     fn execute_module(&mut self, path: &Path, source: &str) -> Result<()> {

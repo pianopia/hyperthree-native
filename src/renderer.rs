@@ -2,6 +2,7 @@ use crate::bridge::{
     CameraProjection, CameraSnapshot, GeometryData, GeometryKind, MaterialSnapshot,
     SharedRenderState, TextureData,
 };
+use crate::webgpu::{NativeWebGpuContext, SharedNativeWebGpuContext};
 use anyhow::{Context as _, Result};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -140,8 +141,8 @@ struct ParticleBatch {
 pub struct Renderer {
     pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     cube_vertex_buffer: wgpu::Buffer,
@@ -200,6 +201,8 @@ impl Renderer {
             )
             .await
             .context("failed to create wgpu device")?;
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
 
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
@@ -460,6 +463,10 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_resources(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
+    }
+
+    pub fn webgpu_context(&self) -> SharedNativeWebGpuContext {
+        NativeWebGpuContext::new(self.device.clone(), self.queue.clone())
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {

@@ -58,6 +58,11 @@ V8のIsolateをホストへ組み込み、Three.js WebGPUレンダラーが使�
 WebGPU IDLを実装する。各GPUオブジェクトはRust側の世代付きハンドルで管理し、
 JS GCとは独立して参照数と破棄を管理する。
 
+現在はこのフェーズの初期段階として、Boa上の`navigator.gpu`、adapter/device、
+`GPUBuffer`、`GPUTexture`、`GPUShaderModule`、Queue uploadのnative smoke pathを
+実装済みである。次はBindGroup、Pipeline、CommandEncoderを実GPUのrender/compute
+passへ接続し、現在の独自PBRパスと同じswapchainを共有する。
+
 ### Phase B: Three.js renderer実行
 
 `navigator.gpu.requestAdapter()`、`requestDevice()`、canvas context、WGSL、
