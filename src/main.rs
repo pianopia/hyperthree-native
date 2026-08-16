@@ -131,9 +131,18 @@ impl GameHost {
         runtime.execute_source(&format!(
             "globalThis.__hyperthreeNativeRestartCount={restart_count};"
         ))?;
-        runtime.execute_file(script)?;
         let initial_size = renderer.window.inner_size();
-        runtime.set_window_size(initial_size.width, initial_size.height)?;
+        runtime.set_window_size(
+            initial_size.width,
+            initial_size.height,
+            renderer.window.scale_factor(),
+        )?;
+        runtime.execute_file(script)?;
+        runtime.set_window_size(
+            initial_size.width,
+            initial_size.height,
+            renderer.window.scale_factor(),
+        )?;
         runtime.execute_start()?;
         log::info!("executed JavaScript entry point: {}", script.display());
         Ok((renderer, runtime))
@@ -303,10 +312,31 @@ fn run_native(
                             .is_none()
                         {
                             host.renderer_mut().resize(size);
-                            if let Err(error) =
-                                host.runtime_mut().set_window_size(size.width, size.height)
-                            {
+                            let scale_factor = host.renderer().window.scale_factor();
+                            if let Err(error) = host.runtime_mut().set_window_size(
+                                size.width,
+                                size.height,
+                                scale_factor,
+                            ) {
                                 log::error!("JavaScript resize event failed: {error:#}");
+                            }
+                        }
+                    }
+                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        let size = host.renderer().window.inner_size();
+                        if host
+                            .renderer()
+                            .webgpu_context()
+                            .device_lost_message()
+                            .is_none()
+                        {
+                            host.renderer_mut().resize(size);
+                            if let Err(error) = host.runtime_mut().set_window_size(
+                                size.width,
+                                size.height,
+                                scale_factor,
+                            ) {
+                                log::error!("JavaScript scale-factor resize failed: {error:#}");
                             }
                         }
                     }

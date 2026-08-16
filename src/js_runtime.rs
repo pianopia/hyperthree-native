@@ -2701,11 +2701,12 @@ impl JsRuntime {
         self.execute_lifecycle_callback("onStop")
     }
 
-    pub fn set_window_size(&mut self, width: u32, height: u32) -> Result<()> {
+    pub fn set_window_size(&mut self, width: u32, height: u32, scale_factor: f64) -> Result<()> {
         let width = width.max(1);
         let height = height.max(1);
+        let (scale_factor, css_width, css_height) = window_metrics(width, height, scale_factor);
         self.execute_source(&format!(
-            "globalThis.window.innerWidth={width}; globalThis.window.innerHeight={height}; globalThis.__hyperthreeNativeCanvas.clientWidth={width}; globalThis.__hyperthreeNativeCanvas.clientHeight={height}; globalThis.dispatchEvent(new Event('resize'));"
+            "(() => {{ const scaleFactor={scale_factor}; const cssWidth={css_width}; const cssHeight={css_height}; globalThis.window.devicePixelRatio=scaleFactor; globalThis.window.innerWidth=cssWidth; globalThis.window.innerHeight=cssHeight; globalThis.__hyperthreeNativeCanvas.clientWidth=cssWidth; globalThis.__hyperthreeNativeCanvas.clientHeight=cssHeight; globalThis.dispatchEvent(new Event('resize')); }})();"
         ))
     }
 
@@ -2727,6 +2728,17 @@ impl JsRuntime {
         );
         self.execute_source(&source)
     }
+}
+
+fn window_metrics(width: u32, height: u32, scale_factor: f64) -> (f64, u32, u32) {
+    let scale_factor = if scale_factor.is_finite() {
+        scale_factor.max(0.1)
+    } else {
+        1.0
+    };
+    let css_width = ((width as f64 / scale_factor).round() as u32).max(1);
+    let css_height = ((height as f64 / scale_factor).round() as u32).max(1);
+    (scale_factor, css_width, css_height)
 }
 
 fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
@@ -3956,7 +3968,9 @@ fn choose_basis_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_animated_gif, normalize_three_compatibility_source, JsRuntime};
+    use super::{
+        decode_animated_gif, normalize_three_compatibility_source, window_metrics, JsRuntime,
+    };
     use crate::bridge::{NativeInputState, NativeRenderState};
     use std::{
         fs,
@@ -4510,6 +4524,13 @@ mod tests {
         let snapshot = render_state.lock().unwrap().snapshot();
         assert_eq!(snapshot.cubes[0].position[0], 1.0);
         runtime.execute_frame(1.0 / 60.0).unwrap();
+    }
+
+    #[test]
+    fn converts_physical_window_size_to_css_metrics() {
+        assert_eq!(window_metrics(1920, 1080, 2.0), (2.0, 960, 540));
+        assert_eq!(window_metrics(1280, 720, f64::NAN), (1.0, 1280, 720));
+        assert_eq!(window_metrics(1, 1, 0.0), (0.1, 10, 10));
     }
 
     #[test]

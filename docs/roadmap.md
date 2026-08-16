@@ -9,6 +9,7 @@
 - [x] Cross-platform CI skeleton and headless GPU backend diagnostics
 - [x] Native keyboard input, frame clock, and start/update/stop lifecycle callbacks
 - [x] Native mouse position/button input and perspective/orthographic camera sync
+- [x] Per-monitor scale-factor propagation from native physical pixels to CSS canvas metrics
 - [x] Native keyboard/mouse/pointer/wheel/touch events with modifier and click dispatch
 - [x] Native Pointer Lock API bridge with winit cursor grab and pointerlockchange lifecycle
 - [x] Native Fullscreen API bridge with winit borderless fullscreen and fullscreenchange lifecycle

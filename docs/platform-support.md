@@ -22,7 +22,9 @@ the HyperThree bridge, not the operating system backend.
 2. **Backend smoke tests**: run the same clear-color and camera/cube bridge
    test on macOS Metal, Windows DirectX 12/Vulkan, and Linux Vulkan/software.
 3. **Input and lifecycle**: normalize keyboard, mouse, gamepad, focus,
-   suspend/resume, resize, fullscreen, and device-lost events.
+   suspend/resume, resize, fullscreen, device-lost, and per-monitor scale-factor
+   events. Physical window pixels are converted to CSS metrics while the native
+   canvas keeps the device-pixel resolution expected by WebGPU.
 4. **Packaging**: add reproducible release artifacts, signing/notarization,
    crash logs, update channels, and per-platform asset directories.
 5. **Performance gates**: measure startup time, memory, frame pacing, asset
