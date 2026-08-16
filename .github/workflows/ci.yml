@@ -74,10 +74,12 @@ jobs:
         run: cargo build --release
 
       - name: Install Three.js fixture dependencies
-        run: npm install --prefix tests/fixtures/threejs-gltf-loader-smoke
+        working-directory: tests/fixtures/threejs-gltf-loader-smoke
+        run: npm install
 
       - name: Build Three.js fixture
-        run: npm run build --prefix tests/fixtures/threejs-gltf-loader-smoke
+        working-directory: tests/fixtures/threejs-gltf-loader-smoke
+        run: npm run build
 
       - name: Run native backend diagnostics
         run: cargo run -- diagnostics
