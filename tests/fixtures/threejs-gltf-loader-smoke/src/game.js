@@ -80,6 +80,7 @@ globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
 globalThis.__gltfKtx2NativeHook = false;
 globalThis.__gltfUastcKtx2Loaded = false;
+globalThis.__gltfAudioLoaded = false;
 globalThis.__gltfBasisKtx2Loaded = false;
 globalThis.__gltfDracoLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
@@ -172,6 +173,16 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
   const loader = new GLTFLoader();
+  const audioContext = new AudioContext();
+  const audioLoad = fetch("public/generated/tone.wav")
+    .then((response) => response.arrayBuffer())
+    .then((buffer) => audioContext.decodeAudioData(buffer))
+    .then((audioBuffer) => {
+      const listener = new THREE.AudioListener();
+      const sound = new THREE.Audio(listener);
+      sound.setBuffer(audioBuffer);
+      return audioBuffer;
+    });
   const dracoLoader = new DRACOLoader();
   loader.setDRACOLoader(dracoLoader);
   loader.setKTX2Loader(ktx2Loader);
@@ -179,7 +190,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     globalThis.__gltfSmokeStage = `loaded-${label}`;
     return value;
   });
-  const [gltf, externalGltf, glb, meshoptGltf, ktx2Gltf, basisKtx2Gltf, uastcKtx2Gltf, dracoGltf] = await Promise.all([
+  const loadedAssets = await Promise.all([
     trackLoad("gltf", loader.loadAsync("public/scene.gltf")),
     trackLoad("external", loader.loadAsync("public/generated/scene-external.gltf")),
     trackLoad("glb", loader.loadAsync("public/generated/scene.glb")),
@@ -188,7 +199,17 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     trackLoad("basis", loader.loadAsync("public/generated/scene-ktx2-basis.gltf")),
     trackLoad("uastc", loader.loadAsync("public/generated/scene-ktx2-uastc.gltf")),
     trackLoad("draco", loader.loadAsync("public/generated/scene-draco.gltf")),
+    trackLoad("audio", audioLoad),
   ]);
+  const gltf = loadedAssets[0];
+  const externalGltf = loadedAssets[1];
+  const glb = loadedAssets[2];
+  const meshoptGltf = loadedAssets[3];
+  const ktx2Gltf = loadedAssets[4];
+  const basisKtx2Gltf = loadedAssets[5];
+  const uastcKtx2Gltf = loadedAssets[6];
+  const dracoGltf = loadedAssets[7];
+  const audioBuffer = loadedAssets[8];
   globalThis.__gltfSmokeStage = "after-gltf-load";
   const skinned = gltf.scene.getObjectByProperty("isSkinnedMesh", true);
   if (!skinned || !skinned.skeleton || skinned.skeleton.bones.length !== 2) {
@@ -229,6 +250,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     uastcKtx2Textured.material.map.image.height === 4 &&
     uastcKtx2Textured.material.map.image.data?.byteLength === 64,
   );
+  globalThis.__gltfAudioLoaded = Boolean(
+    audioBuffer?.sampleRate === 8000 &&
+    audioBuffer.length === 4 &&
+    audioBuffer.numberOfChannels === 1 &&
+    Math.abs(audioBuffer.getChannelData(0)[1] - 0.25) < 0.01,
+  );
   const dracoMesh = dracoGltf.scene.getObjectByProperty("isMesh", true);
   globalThis.__gltfDracoLoaded = Boolean(
     dracoMesh?.geometry?.attributes?.position?.count === 24 &&
@@ -258,7 +285,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

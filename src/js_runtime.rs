@@ -1,5 +1,6 @@
 use crate::{
     asset::{decode_meshopt_buffer, AssetStore},
+    audio::{decode_audio, AudioEngine},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     draco::decode_mesh as decode_draco_mesh,
     webgpu::SharedNativeWebGpuContext,
@@ -60,6 +61,7 @@ impl JsRuntime {
             .build()
             .map_err(|error| anyhow::anyhow!("failed to create JavaScript context: {error}"))?;
         let runtime_start = Instant::now();
+        let audio_engine = Rc::new(RefCell::new(AudioEngine::default()));
         context
             .register_global_builtin_callable(js_string!("__hyperthreeNow"), 0, unsafe {
                 NativeFunction::from_closure(move |_this, _args, _context| {
@@ -798,6 +800,118 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to register asset fetch binding: {error}"))?;
 
         context
+            .register_global_builtin_callable(js_string!("__hyperthreeDecodeAudio"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = byte_array_value(args.get_or_undefined(0), context)?;
+                    let decoded = decode_audio(&source).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to decode audio: {error}"))
+                    })?;
+                    let mut channels = Vec::with_capacity(decoded.channels.len());
+                    for channel in decoded.channels {
+                        let bytes = bytemuck::cast_slice::<f32, u8>(&channel).to_vec();
+                        let buffer = JsArrayBuffer::from_byte_block(
+                            AlignedVec::from_iter(0, bytes),
+                            context,
+                        )
+                        .map_err(|error| {
+                            JsNativeError::error().with_message(format!(
+                                "failed to create audio channel buffer: {error}"
+                            ))
+                        })?;
+                        channels.push(buffer.into());
+                    }
+                    let result = JsObject::with_object_proto(context.intrinsics());
+                    result.set(
+                        js_string!("channels"),
+                        JsArray::from_iter(channels, context),
+                        false,
+                        context,
+                    )?;
+                    result.set(
+                        js_string!("sampleRate"),
+                        JsValue::from(decoded.sample_rate as f64),
+                        false,
+                        context,
+                    )?;
+                    result.set(
+                        js_string!("length"),
+                        JsValue::from(decoded.length as f64),
+                        false,
+                        context,
+                    )?;
+                    result.set(
+                        js_string!("duration"),
+                        JsValue::from(decoded.length as f64 / decoded.sample_rate as f64),
+                        false,
+                        context,
+                    )?;
+                    Ok(result.into())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register audio decode binding: {error}"))?;
+
+        let audio_engine_for_play = audio_engine.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 6, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = byte_array_value(args.get_or_undefined(0), context)?;
+                    let looped = args.get_or_undefined(1).to_boolean();
+                    let volume = optional_number_arg(args, 2, context, 1.0)? as f32;
+                    let when = optional_number_arg(args, 3, context, 0.0)?;
+                    let offset = optional_number_arg(args, 4, context, 0.0)?;
+                    let duration = optional_number_arg(args, 5, context, 0.0)?;
+                    let id = audio_engine_for_play
+                        .borrow_mut()
+                        .play(source, looped, volume, when, offset, duration)
+                        .map_err(|error| {
+                            JsNativeError::error()
+                                .with_message(format!("native audio playback failed: {error}"))
+                        })?;
+                    Ok(JsValue::from(id as f64))
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio playback binding: {error}")
+            })?;
+
+        for (name, operation) in [
+            ("__hyperthreeAudioStop", 0u8),
+            ("__hyperthreeAudioPause", 1u8),
+            ("__hyperthreeAudioResume", 2u8),
+        ] {
+            let audio_engine_for_control = audio_engine.clone();
+            context
+                .register_global_builtin_callable(js_string!(name), 1, unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        let mut engine = audio_engine_for_control.borrow_mut();
+                        match operation {
+                            0 => engine.stop(id),
+                            1 => engine.pause(id),
+                            _ => engine.resume(id),
+                        }
+                        Ok(JsValue::undefined())
+                    })
+                })
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to register audio control binding {name}: {error}")
+                })?;
+        }
+
+        let audio_engine_for_volume = audio_engine.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioSetVolume"), 2, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let id = geometry_id_arg(args, 0, context)?;
+                    let volume = number_arg(args, 1, context)? as f32;
+                    audio_engine_for_volume.borrow_mut().set_volume(id, volume);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register audio volume binding: {error}"))?;
+
+        context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeMeshopt"), 5, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
@@ -1214,7 +1328,172 @@ impl JsRuntime {
                     this.type = String(options.type || '').toLowerCase();
                   }
                   async arrayBuffer() { return this.__hyperthreeBytes.slice().buffer; }
+                  async text() { return new TextDecoder().decode(this.__hyperthreeBytes); }
+                  slice(start = 0, end = this.size, contentType = '') {
+                    const from = Math.max(0, Number(start) || 0);
+                    const to = Math.max(from, Number(end) || this.size);
+                    return new Blob([this.__hyperthreeBytes.slice(from, to)], { type: contentType });
+                  }
                 };
+                globalThis.File = globalThis.File || class File extends Blob {
+                  constructor(parts, name, options = {}) {
+                    super(parts, options);
+                    this.name = String(name);
+                    this.lastModified = Number(options.lastModified || 0);
+                  }
+                };
+                globalThis.__hyperthreeBlobUrls = globalThis.__hyperthreeBlobUrls || new Map();
+                globalThis.__hyperthreeBlobUrlId = globalThis.__hyperthreeBlobUrlId || 0;
+                globalThis.URL = globalThis.URL || class URL {
+                  constructor(input, base = undefined) {
+                    const value = String(input);
+                    this.href = base === undefined ? value : new URL(base).href.replace(/[^/]*$/, '') + value;
+                    this.protocol = this.href.includes(':') ? this.href.slice(0, this.href.indexOf(':') + 1) : '';
+                    this.pathname = this.href.slice(this.protocol.length).split(/[?#]/)[0];
+                    this.search = this.href.includes('?') ? `?${this.href.split('?')[1].split('#')[0]}` : '';
+                    this.hash = this.href.includes('#') ? `#${this.href.split('#')[1]}` : '';
+                  }
+                  toString() { return this.href; }
+                  static createObjectURL(value) {
+                    const id = `blob:hyperthree/${++globalThis.__hyperthreeBlobUrlId}`;
+                    const bytes = value?.__hyperthreeBytes || new Uint8Array(0);
+                    globalThis.__hyperthreeBlobUrls.set(id, new Uint8Array(bytes));
+                    return id;
+                  }
+                  static revokeObjectURL(id) { globalThis.__hyperthreeBlobUrls.delete(String(id)); }
+                };
+                const makeAudioParam = (owner, initialValue = 0, onChange = () => {}) => {
+                  const param = {
+                    value: Number(initialValue),
+                    defaultValue: Number(initialValue),
+                    setValueAtTime(value) { param.value = Number(value); onChange(param.value); return param; },
+                    setTargetAtTime(value) { param.value = Number(value); onChange(param.value); return param; },
+                    linearRampToValueAtTime(value) { param.value = Number(value); onChange(param.value); return param; },
+                    exponentialRampToValueAtTime(value) { param.value = Number(value); onChange(param.value); return param; },
+                    cancelScheduledValues() { return param; },
+                  };
+                  owner?.__hyperthreeAudioParams?.push(param);
+                  return param;
+                };
+                globalThis.AudioBuffer = globalThis.AudioBuffer || class AudioBuffer {
+                  constructor(options = {}) {
+                    this.sampleRate = Number(options.sampleRate || 44100);
+                    this.length = Number(options.length || 0);
+                    this.duration = this.length / this.sampleRate;
+                    this.numberOfChannels = Number(options.numberOfChannels || options.channels?.length || 1);
+                    this._channels = options.channels || Array.from({ length: this.numberOfChannels }, () => new Float32Array(this.length));
+                    this.__hyperthreeEncoded = options.encoded || null;
+                  }
+                  getChannelData(channel) { return this._channels[channel] || new Float32Array(0); }
+                  copyFromChannel(destination, channel, startInChannel = 0) {
+                    destination.set(this.getChannelData(channel).subarray(startInChannel, startInChannel + destination.length));
+                  }
+                  copyToChannel(source, channel, startInChannel = 0) {
+                    this.getChannelData(channel).set(source, startInChannel);
+                  }
+                };
+                globalThis.AudioNode = globalThis.AudioNode || class AudioNode {
+                  constructor(context) { this.context = context; this._destination = null; }
+                  connect(destination) { this._destination = destination; return destination; }
+                  disconnect() { this._destination = null; }
+                };
+                globalThis.GainNode = globalThis.GainNode || class GainNode extends AudioNode {
+                  constructor(context) {
+                    super(context);
+                    this.__hyperthreeSourceIds = [];
+                    this.__hyperthreeAudioParams = [];
+                    this.gain = makeAudioParam(this, 1, (value) => {
+                      for (const id of this.__hyperthreeSourceIds) __hyperthreeAudioSetVolume(id, value);
+                    });
+                  }
+                };
+                globalThis.AudioBufferSourceNode = globalThis.AudioBufferSourceNode || class AudioBufferSourceNode extends AudioNode {
+                  constructor(context) {
+                    super(context);
+                    this.buffer = null;
+                    this.loop = false;
+                    this.loopStart = 0;
+                    this.loopEnd = 0;
+                    this.onended = null;
+                    this.__hyperthreeStarted = false;
+                    this.__hyperthreeAudioParams = [];
+                    this.playbackRate = makeAudioParam(this, 1);
+                    this.detune = makeAudioParam(this, 0);
+                  }
+                  start(when = 0, offset = 0, duration = 0) {
+                    if (this.__hyperthreeStarted || !this.buffer?.__hyperthreeEncoded) return;
+                    this.__hyperthreeStarted = true;
+                    const destination = this._destination;
+                    const volume = destination?.gain?.value ?? 1;
+                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, volume, when, offset, duration);
+                    this.__hyperthreeAudioId = id;
+                    if (destination?.__hyperthreeSourceIds) destination.__hyperthreeSourceIds.push(id);
+                  }
+                  stop() {
+                    if (this.__hyperthreeAudioId !== undefined) __hyperthreeAudioStop(this.__hyperthreeAudioId);
+                    if (typeof this.onended === 'function') this.onended();
+                  }
+                };
+                globalThis.PannerNode = globalThis.PannerNode || class PannerNode extends AudioNode {
+                  constructor(context) {
+                    super(context);
+                    this.panningModel = 'HRTF';
+                    this.distanceModel = 'inverse';
+                    this.refDistance = 1;
+                    this.maxDistance = 10000;
+                    this.rolloffFactor = 1;
+                    this.coneInnerAngle = 360;
+                    this.coneOuterAngle = 0;
+                    this.coneOuterGain = 0;
+                    this.positionX = makeAudioParam(this, 0);
+                    this.positionY = makeAudioParam(this, 0);
+                    this.positionZ = makeAudioParam(this, 0);
+                    this.orientationX = makeAudioParam(this, 1);
+                    this.orientationY = makeAudioParam(this, 0);
+                    this.orientationZ = makeAudioParam(this, 0);
+                  }
+                  setPosition(x, y, z) { this.positionX.value = x; this.positionY.value = y; this.positionZ.value = z; }
+                  setOrientation(x, y, z) { this.orientationX.value = x; this.orientationY.value = y; this.orientationZ.value = z; }
+                };
+                globalThis.AudioContext = globalThis.AudioContext || class AudioContext {
+                  constructor() {
+                    this.sampleRate = 44100;
+                    this.state = 'running';
+                    this.destination = { context: this, __hyperthreeSourceIds: [] };
+                    this.listener = {
+                      positionX: makeAudioParam(null, 0), positionY: makeAudioParam(null, 0), positionZ: makeAudioParam(null, 0),
+                      forwardX: makeAudioParam(null, 0), forwardY: makeAudioParam(null, 0), forwardZ: makeAudioParam(null, -1),
+                      upX: makeAudioParam(null, 0), upY: makeAudioParam(null, 1), upZ: makeAudioParam(null, 0),
+                      setPosition() {}, setOrientation() {},
+                    };
+                    this.__hyperthreeAudioStart = performance.now() / 1000;
+                  }
+                  get currentTime() { return Math.max(0, performance.now() / 1000 - this.__hyperthreeAudioStart); }
+                  createBuffer(numberOfChannels, length, sampleRate) { return new AudioBuffer({ numberOfChannels, length, sampleRate }); }
+                  decodeAudioData(data, successCallback, errorCallback) {
+                    const promise = Promise.resolve().then(() => {
+                      const decoded = __hyperthreeDecodeAudio(new Uint8Array(data));
+                      const buffer = new AudioBuffer({
+                        numberOfChannels: decoded.channels.length,
+                        length: decoded.length,
+                        sampleRate: decoded.sampleRate,
+                        channels: decoded.channels.map((channel) => new Float32Array(channel)),
+                        encoded: data.slice(0),
+                      });
+                      if (typeof successCallback === 'function') successCallback(buffer);
+                      return buffer;
+                    });
+                    if (typeof errorCallback === 'function') promise.catch(errorCallback);
+                    return promise;
+                  }
+                  createBufferSource() { return new AudioBufferSourceNode(this); }
+                  createGain() { return new GainNode(this); }
+                  createPanner() { return new PannerNode(this); }
+                  resume() { this.state = 'running'; return Promise.resolve(); }
+                  suspend() { this.state = 'suspended'; return Promise.resolve(); }
+                  close() { this.state = 'closed'; return Promise.resolve(); }
+                };
+                globalThis.webkitAudioContext = globalThis.webkitAudioContext || globalThis.AudioContext;
                 globalThis.Response = globalThis.Response || class Response {
                   constructor(body = null, init = {}) {
                     this._body = body instanceof ArrayBuffer ? body : new Uint8Array(body || []).buffer;
@@ -1325,7 +1604,9 @@ impl JsRuntime {
                   const request = input instanceof Request ? input : new Request(input);
                   const buffer = request.url.startsWith('data:')
                     ? decodeDataUrl(request.url)
-                    : __hyperthreeReadAsset(request.url);
+                    : request.url.startsWith('blob:')
+                      ? (globalThis.__hyperthreeBlobUrls.get(request.url)?.slice().buffer || new ArrayBuffer(0))
+                      : __hyperthreeReadAsset(request.url);
                   const headers = new Headers({ 'Content-Length': buffer.byteLength });
                   return new Response(buffer, { url: request.url, headers });
                 });
@@ -1474,6 +1755,9 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
     let mut boa_changed = false;
     if is_gltf_loader_bundle || is_ktx2_loader_bundle || is_draco_loader_bundle {
         boa_changed = normalize_boa_class_constructor_bindings(&mut normalized);
+    }
+    if source.contains("decodeAudioData") {
+        boa_changed |= normalize_boa_audio_context_binding(&mut normalized);
     }
     if is_gltf_loader_bundle {
         if normalized.contains("let of=") {
@@ -1691,6 +1975,31 @@ fn normalize_boa_class_constructor_bindings(source: &mut String) -> bool {
     for (start, end, replacement) in replacements.into_iter().rev() {
         source.replace_range(start..end, replacement);
     }
+    true
+}
+
+/// Boa 0.21 also loses the lexical slot for the module-level private context
+/// variable emitted by Three.js' AudioContext helper when the source is bundled
+/// into one script. Convert only that declaration to a function-safe `var`; the
+/// public AudioContext object and all other game lexical bindings remain intact.
+fn normalize_boa_audio_context_binding(source: &mut String) -> bool {
+    let Some(context_marker) = source.rfind("getContext(){return ") else {
+        return false;
+    };
+    let Some(class_start) = source[..context_marker].rfind("class ") else {
+        return false;
+    };
+    let Some(let_start) = source[..class_start].rfind("let ") else {
+        return false;
+    };
+    let declaration = &source[let_start..class_start];
+    let Some(semi) = declaration.find(';') else {
+        return false;
+    };
+    if !declaration[semi + 1..].trim().is_empty() {
+        return false;
+    }
+    source.replace_range(let_start..let_start + 3, "var");
     true
 }
 
@@ -2035,6 +2344,25 @@ fn number_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult
             .with_message("native render values must be finite numbers")
             .into())
     }
+}
+
+fn optional_number_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+    default: f64,
+) -> JsResult<f64> {
+    let value = args.get_or_undefined(index);
+    if value.is_undefined() || value.is_null() {
+        return Ok(default);
+    }
+    let value = number_arg(args, index, context)?;
+    if value < 0.0 {
+        return Err(JsNativeError::range()
+            .with_message("audio time values must be non-negative")
+            .into());
+    }
+    Ok(value)
 }
 
 fn geometry_id_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<u64> {
@@ -2404,6 +2732,13 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_boa_audio_context_private_lexical_binding() {
+        let source = "let na;class gb{static getContext(){return na===void 0&&(na=new(window.AudioContext||window.webkitAudioContext)),na}}function decodeAudioData(){}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized.contains("var na;"));
+    }
+
+    #[test]
     fn injects_native_draco_decoder_and_skips_worker_preload() {
         let source = r#"/* DRACOLoader */ class DRACOLoader{preload() {
 
@@ -2519,6 +2854,76 @@ mod tests {
             .unwrap();
         runtime
             .execute_source("if (globalThis.__uastcProbe !== true) throw new Error('UASTC KTX2 binding probe failed');")
+            .unwrap();
+    }
+
+    #[test]
+    fn native_audio_context_decodes_standard_audio_buffer_shape() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__audioProbe = false;
+                const context = new AudioContext();
+                fetch('data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEACAAAABAAAAACABAAZGF0YQgAAAAAAAAgAOAAAA==')
+                  .then((response) => response.arrayBuffer())
+                  .then((buffer) => context.decodeAudioData(buffer))
+                  .then((audioBuffer) => {
+                    const gain = context.createGain();
+                    const source = context.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(gain);
+                    gain.connect(context.destination);
+                    gain.gain.setValueAtTime(0.5, context.currentTime);
+                    globalThis.__audioProbe = audioBuffer.sampleRate === 8 &&
+                      audioBuffer.length === 4 && audioBuffer.numberOfChannels === 1 &&
+                      Math.abs(audioBuffer.getChannelData(0)[1] - 0.25) < 0.01 &&
+                      typeof source.start === 'function' && typeof source.stop === 'function';
+                  });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source("if (globalThis.__audioProbe !== true) throw new Error('AudioContext compatibility probe failed');")
+            .unwrap();
+    }
+
+    #[test]
+    fn blob_file_object_url_round_trips_through_fetch() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__blobUrlProbe = false;
+                const file = new File([new Uint8Array([7, 11, 13])], 'probe.bin', {
+                  type: 'application/octet-stream',
+                  lastModified: 123,
+                });
+                const url = URL.createObjectURL(file);
+                fetch(url)
+                  .then((response) => response.arrayBuffer())
+                  .then((buffer) => {
+                    const bytes = new Uint8Array(buffer);
+                    globalThis.__blobUrlProbe = file.name === 'probe.bin' &&
+                      file.type === 'application/octet-stream' &&
+                      file.lastModified === 123 &&
+                      url.startsWith('blob:hyperthree/') &&
+                      bytes.length === 3 && bytes[0] === 7 && bytes[1] === 11 && bytes[2] === 13;
+                    URL.revokeObjectURL(url);
+                  });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source(
+                "if (globalThis.__blobUrlProbe !== true) throw new Error('Blob/File object URL probe failed');",
+            )
             .unwrap();
     }
 

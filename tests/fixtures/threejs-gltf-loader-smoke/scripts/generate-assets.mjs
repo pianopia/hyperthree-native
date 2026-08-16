@@ -36,6 +36,26 @@ const png = Buffer.from(
   "base64",
 );
 
+const makeWav = () => {
+  const sampleRate = 8000;
+  const samples = [0, 8192, -8192, 0];
+  const output = Buffer.alloc(44 + samples.length * 2);
+  output.write("RIFF", 0);
+  output.writeUInt32LE(36 + samples.length * 2, 4);
+  output.write("WAVEfmt ", 8);
+  output.writeUInt32LE(16, 16);
+  output.writeUInt16LE(1, 20);
+  output.writeUInt16LE(1, 22);
+  output.writeUInt32LE(sampleRate, 24);
+  output.writeUInt32LE(sampleRate * 2, 28);
+  output.writeUInt16LE(2, 32);
+  output.writeUInt16LE(16, 34);
+  output.write("data", 36);
+  output.writeUInt32LE(samples.length * 2, 40);
+  samples.forEach((sample, index) => output.writeInt16LE(sample, 44 + index * 2));
+  return output;
+};
+
 const basisLzKtx2 = Buffer.from(
   "q0tUWCAyMLsNChoKAAAAAAEAAAAIAAAACAAAAAAAAAAAAAAAAQAAAAEAAAABAAAAaAAAADwAAACkAAAARAAAAOgAAAAAAAAAjAAAAAAAAAB0AQAAAAAAAAMAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAIAOACjAQIAAwMAAAgIAAAAAAAAAAA/AAAAAAAAAAAA/////0AAPw8AAAAAAAAAAP////9AAAAAS1RYd3JpdGVyAGt0eCBjcmVhdGUgdjUuMC5fX2RlZmF1bHRfXyAvIGxpYmt4IHY1LjAuX19kZWZhdWx0X18AAQIAAgAtAAAACQAAAC4AAAAAAAAAAAAAAAAAAAABAAAAAQAAAAIAAAABwAQAAAAAAAACBJgbIAAAAAjDNpE+kQBgAgAAAAAAAIEATAEQAAAAACBZwD2sqqqqUlVVVQUUwEQAAAAAAAASQQCYAAAAAAAAQBgCogQMAAAAg3Z7SQSiIABMAAgAAAAAIAIBBkwO",
   "base64",
@@ -186,6 +206,7 @@ const makeDocument = ({ embeddedImage, glb }) => {
 const externalDocument = makeDocument({ glb: false });
 await writeFile(new URL("scene.bin", generated), geometry);
 await writeFile(new URL("texture.png", generated), png);
+await writeFile(new URL("tone.wav", generated), makeWav());
 await writeFile(new URL("scene-external.gltf", generated), JSON.stringify(externalDocument, null, 2));
 
 const ktx2Document = JSON.parse(JSON.stringify(externalDocument));

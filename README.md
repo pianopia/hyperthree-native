@@ -77,6 +77,9 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 [`tests/fixtures/threejs-gltf-loader-smoke`](tests/fixtures/threejs-gltf-loader-smoke/README.md)
 で再現できます。Three.jsの`GLTFLoader.loadAsync()`がembedded bufferから
 SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描画します。
+同fixtureでは、ネイティブ`AudioContext`とThree.jsの`AudioListener`/`Audio`を
+使ったWAVデコード経路も検証します。`AudioLoader`を含む全Three.js標準APIの互換性は
+まだ完了しておらず、未実装APIは段階的に追加します。
 
 ## 構成
 
@@ -101,7 +104,7 @@ SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描�
 `BoxGeometry`、`PlaneGeometry`、`SphereGeometry`と任意の位置/index/UV
 `BufferGeometry`をネイティブ描画へ同期します。任意のブラウザ向けThree.js
 ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API
-バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
+バインディング、入力・音声の全API、GPU Driven Culling、Indirect Draw、glTF/KTX2の
 完全な直接VRAM転送を引き続き実装する必要があります。現時点のGLTFLoader fixtureは
 embedded buffer、GLB、外部buffer、PNG画像テクスチャ、Meshopt圧縮glTF、raw BC1/BasisLZ/UASTC KTX2を
 標準`KTX2Loader`/`KHR_texture_basisu`経由で検証済みです。BasisLZ/UASTC向けnative transcoder

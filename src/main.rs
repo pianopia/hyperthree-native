@@ -1,4 +1,5 @@
 mod asset;
+mod audio;
 mod bridge;
 mod draco;
 mod js_runtime;
