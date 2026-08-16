@@ -152,7 +152,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
   });
   const bufferTextureReadback = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  device.queue.writeBuffer(bufferTextureSource, 0, new Uint8Array([31, 47, 59, 71]));
+  device.queue.writeBuffer(bufferTextureSource, 0, new Uint8Array([0, 0, 0, 0, 31, 47, 59, 71]), 4, 4);
   const bufferTextureEncoder = device.createCommandEncoder();
   bufferTextureEncoder.copyBufferToTexture(
     { buffer: bufferTextureSource, bytesPerRow: 256, rowsPerImage: 1 },
