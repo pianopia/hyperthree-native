@@ -99,12 +99,27 @@ struct CommandEncoderState {
 enum RecordedCommand {
     RenderPass(RenderPassState),
     ComputePass(ComputePassState),
+    ClearBuffer {
+        buffer: u64,
+        offset: u64,
+        size: Option<u64>,
+    },
     CopyBufferToBuffer {
         source: u64,
         source_offset: u64,
         destination: u64,
         destination_offset: u64,
         size: u64,
+    },
+    CopyBufferToTexture {
+        source: u64,
+        source_offset: u64,
+        bytes_per_row: u32,
+        rows_per_image: u32,
+        destination: u64,
+        destination_mip_level: u32,
+        destination_origin: [u32; 3],
+        size: [u32; 3],
     },
     CopyTextureToTexture {
         source: u64,
@@ -1463,6 +1478,16 @@ impl NativeWebGpuContext {
         payload: &Value,
     ) -> Result<(), String> {
         let command = match operation {
+            "clearBuffer" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "clearBuffer payload must be an array".to_string())?;
+                RecordedCommand::ClearBuffer {
+                    buffer: value_u64(values, 0)?,
+                    offset: value_u64_or(values, 1, 0)?,
+                    size: values.get(2).and_then(Value::as_u64),
+                }
+            }
             "copyBufferToBuffer" => {
                 let values = payload
                     .as_array()
@@ -1473,6 +1498,45 @@ impl NativeWebGpuContext {
                     destination: value_u64(values, 2)?,
                     destination_offset: value_u64_or(values, 3, 0)?,
                     size: value_u64(values, 4)?,
+                }
+            }
+            "copyBufferToTexture" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "copyBufferToTexture payload must be an array".to_string())?;
+                let source = values
+                    .first()
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| "buffer texture source must be an object".to_string())?;
+                let destination = texture_copy_descriptor(values, 1)?;
+                let size = values
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| "copy size must be an array".to_string())?;
+                RecordedCommand::CopyBufferToTexture {
+                    source: source
+                        .get("buffer")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| "buffer texture source has no buffer handle".to_string())?,
+                    source_offset: source.get("offset").and_then(Value::as_u64).unwrap_or(0),
+                    bytes_per_row: source
+                        .get("bytesPerRow")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| "buffer texture source has no bytesPerRow".to_string())?
+                        as u32,
+                    rows_per_image: source
+                        .get("rowsPerImage")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(value_u32_or(size, 1, 1)? as u64)
+                        as u32,
+                    destination: destination.0,
+                    destination_mip_level: destination.1,
+                    destination_origin: destination.2,
+                    size: [
+                        value_u32(size, 0)?,
+                        value_u32_or(size, 1, 1)?,
+                        value_u32_or(size, 2, 1)?,
+                    ],
                 }
             }
             "copyTextureToTexture" => {
@@ -1795,6 +1859,17 @@ impl NativeWebGpuContext {
                 RecordedCommand::ComputePass(pass) => {
                     encode_compute_pass(&mut encoder, &resources, pass)?;
                 }
+                RecordedCommand::ClearBuffer {
+                    buffer,
+                    offset,
+                    size,
+                } => {
+                    let buffer = resources
+                        .buffers
+                        .get(&buffer)
+                        .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
+                    encoder.clear_buffer(buffer, offset, size);
+                }
                 RecordedCommand::CopyBufferToBuffer {
                     source,
                     source_offset,
@@ -1816,6 +1891,47 @@ impl NativeWebGpuContext {
                         destination_buffer,
                         destination_offset,
                         size,
+                    );
+                }
+                RecordedCommand::CopyBufferToTexture {
+                    source,
+                    source_offset,
+                    bytes_per_row,
+                    rows_per_image,
+                    destination,
+                    destination_mip_level,
+                    destination_origin,
+                    size,
+                } => {
+                    let source_buffer = resources
+                        .buffers
+                        .get(&source)
+                        .ok_or_else(|| format!("unknown source GPUBuffer handle {source}"))?;
+                    let destination_texture = texture_resource(&resources, destination)?;
+                    encoder.copy_buffer_to_texture(
+                        wgpu::ImageCopyBuffer {
+                            buffer: source_buffer,
+                            layout: wgpu::ImageDataLayout {
+                                offset: source_offset,
+                                bytes_per_row: Some(bytes_per_row),
+                                rows_per_image: Some(rows_per_image),
+                            },
+                        },
+                        wgpu::ImageCopyTexture {
+                            texture: destination_texture,
+                            mip_level: destination_mip_level,
+                            origin: wgpu::Origin3d {
+                                x: destination_origin[0],
+                                y: destination_origin[1],
+                                z: destination_origin[2],
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: size[0],
+                            height: size[1],
+                            depth_or_array_layers: size[2],
+                        },
                     );
                 }
                 RecordedCommand::CopyTextureToTexture {
@@ -4171,13 +4287,21 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       else requestAnimationFrame(pollLost);
     };
     requestAnimationFrame(pollLost);
+    const byteView = value => value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset ?? 0, value.byteLength ?? value.length);
     const queue = {
-      writeBuffer(buffer, offset, data) {
-        const bytes = new Uint8Array(data.buffer, data.byteOffset ?? 0, data.byteLength ?? data.length);
+      writeBuffer(buffer, offset, data, dataOffset = 0, size) {
+        const view = byteView(data);
+        const elementSize = data.BYTES_PER_ELEMENT ?? 1;
+        const start = dataOffset * elementSize;
+        const end = size === undefined ? view.byteLength : start + size * elementSize;
+        const bytes = view.subarray(start, end);
         __hyperthreeWebGpuWriteBuffer(buffer.__hyperthreeHandle, offset, bytes);
       },
       writeTexture(destination, data, dataLayout, size) {
-        const bytes = new Uint8Array(data.buffer, data.byteOffset ?? 0, data.byteLength ?? data.length);
+        const view = byteView(data);
+        const bytes = view.subarray(dataLayout.offset ?? 0);
         const origin = destination.origin ?? { x: 0, y: 0, z: 0 };
         const normalizedSize = Array.isArray(size) ? { width: size[0], height: size[1] ?? 1, depthOrArrayLayers: size[2] ?? 1 } : size;
         __hyperthreeWebGpuWriteTexture(
@@ -4311,6 +4435,28 @@ const WEBGPU_BOOTSTRAP: &str = r#"
               handleId(source), sourceOffset ?? 0, handleId(destination), destinationOffset ?? 0, size,
             ]));
           },
+          clearBuffer(buffer, offset = 0, size) {
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'clearBuffer', JSON.stringify([
+              handleId(buffer), offset, size === undefined ? null : size,
+            ]));
+          },
+          copyBufferToTexture(source, destination, size) {
+            const normalizeSource = value => ({
+              buffer: handleId(value.buffer),
+              offset: value.offset ?? 0,
+              bytesPerRow: value.bytesPerRow,
+              rowsPerImage: value.rowsPerImage ?? (Array.isArray(size) ? size[1] : size.height ?? 1),
+            });
+            const normalizeDestination = value => ({
+              texture: handleId(value.texture),
+              mipLevel: value.mipLevel ?? 0,
+              origin: Array.isArray(value.origin) ? value.origin : [value.origin?.x ?? 0, value.origin?.y ?? 0, value.origin?.z ?? 0],
+            });
+            const normalizedSize = Array.isArray(size) ? size : [size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1];
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'copyBufferToTexture', JSON.stringify([
+              normalizeSource(source), normalizeDestination(destination), normalizedSize,
+            ]));
+          },
           copyTextureToTexture(source, destination, size) {
             const normalizeCopy = value => ({
               texture: handleId(value.texture),
@@ -4391,6 +4537,9 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       setBindGroup(index, bindGroup, dynamicOffsets = []) { command('setBindGroup', [index, handleId(bindGroup), dynamicOffsets]); },
       setVertexBuffer(slot, buffer, offset = 0, size) { command('setVertexBuffer', [slot, handleId(buffer), offset, size ?? null]); },
       setIndexBuffer(buffer, format, offset = 0) { command('setIndexBuffer', [handleId(buffer), offset, format]); },
+      // Three.js' common backend calls these state setters while recording a
+      // bundle. WebGPU render bundles inherit this state from the render pass,
+      // so the native pass remains authoritative and these are compatibility no-ops.
       setViewport() {},
       setScissorRect() {},
       setBlendConstant() {},

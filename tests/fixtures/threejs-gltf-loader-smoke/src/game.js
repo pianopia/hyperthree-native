@@ -97,6 +97,8 @@ globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfMappedBufferSmoke = false;
 globalThis.__gltfQuerySmoke = false;
 globalThis.__gltfRenderBundleSmoke = false;
+globalThis.__gltfClearBufferSmoke = false;
+globalThis.__gltfBufferTextureSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -129,10 +131,47 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const mappedBytes = new Uint8Array(mappedReadback.getMappedRange());
   globalThis.__gltfMappedBufferSmoke = mappedBytes[0] === 19 && mappedBytes[1] === 23 && mappedBytes[2] === 29 && mappedBytes[3] === 31;
   mappedReadback.unmap();
+  const clearReadback = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const clearEncoder = device.createCommandEncoder();
+  clearEncoder.clearBuffer(sourceBuffer);
+  clearEncoder.copyBufferToBuffer(sourceBuffer, 0, clearReadback, 0, 4);
+  device.queue.submit([clearEncoder.finish()]);
+  await clearReadback.mapAsync(GPUMapMode.READ);
+  const clearBytes = new Uint8Array(clearReadback.getMappedRange());
+  globalThis.__gltfClearBufferSmoke = clearBytes.every(byte => byte === 0);
+  clearReadback.unmap();
+  clearReadback.destroy();
   mappedUpload.destroy();
   mappedReadback.destroy();
   sourceBuffer.destroy();
   readbackBuffer.destroy();
+  const bufferTextureSource = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  const bufferTextureTarget = device.createTexture({
+    size: { width: 1, height: 1 },
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
+  });
+  const bufferTextureReadback = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  device.queue.writeBuffer(bufferTextureSource, 0, new Uint8Array([31, 47, 59, 71]));
+  const bufferTextureEncoder = device.createCommandEncoder();
+  bufferTextureEncoder.copyBufferToTexture(
+    { buffer: bufferTextureSource, bytesPerRow: 256, rowsPerImage: 1 },
+    { texture: bufferTextureTarget },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+  bufferTextureEncoder.copyTextureToBuffer(
+    { texture: bufferTextureTarget },
+    { buffer: bufferTextureReadback, bytesPerRow: 256, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([bufferTextureEncoder.finish()]);
+  await bufferTextureReadback.mapAsync(GPUMapMode.READ);
+  const bufferTextureBytes = new Uint8Array(bufferTextureReadback.getMappedRange());
+  globalThis.__gltfBufferTextureSmoke = bufferTextureBytes[0] === 31 && bufferTextureBytes[1] === 47 && bufferTextureBytes[2] === 59 && bufferTextureBytes[3] === 71;
+  bufferTextureReadback.unmap();
+  bufferTextureReadback.destroy();
+  bufferTextureTarget.destroy();
+  bufferTextureSource.destroy();
   const indirectTarget = device.createTexture({
     size: { width: 4, height: 4 },
     format: "rgba8unorm",
@@ -380,6 +419,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
+      !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }

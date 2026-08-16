@@ -85,6 +85,11 @@ shadow、equirectangular environment、MRT、indirect drawとそのGPU readback�
 スモーク済みである。`GPURenderBundleEncoder`の記録・finish・`executeBundles()`、
 `GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/
 `endOcclusionQuery()`、`resolveQuerySet()`とMAP_READ readbackもnative wgpuへ接続した。
+`GPUCommandEncoder.clearBuffer()`、`copyBufferToTexture()`、`GPUQueue.writeBuffer()`の
+dataOffset/size、`writeTexture()`のdataLayout.offsetもnative wgpuコマンドへ接続した。
+Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
+setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
+誤って状態を持ち込まない互換no-opとして公開している。
 `GPUCanvasContext.configure()`/`unconfigure()`、canvas surface textureの
 寿命管理、Lost/Outdated時のnative再configureも標準Renderer経路へ接続した。ネイティブsurfaceが
 opaque合成しか公開しない場合は、Three.jsのpremultiplied要求をopaqueへフォールバックする。

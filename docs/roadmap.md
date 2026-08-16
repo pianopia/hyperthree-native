@@ -43,6 +43,7 @@
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
 - [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
+- [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration
