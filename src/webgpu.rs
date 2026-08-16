@@ -377,6 +377,28 @@ impl NativeWebGpuContext {
         Ok(id)
     }
 
+    fn destroy_texture(&self, id: u64) -> Result<(), String> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?;
+        let texture = resources
+            .textures
+            .remove(&id)
+            .ok_or_else(|| format!("unknown GPUTexture handle {id}"))?;
+        let stale_views = resources
+            .texture_view_sources
+            .iter()
+            .filter_map(|(view_id, source_id)| (*source_id == id).then_some(*view_id))
+            .collect::<Vec<_>>();
+        for view_id in stale_views {
+            resources.texture_view_sources.remove(&view_id);
+            resources.texture_views.remove(&view_id);
+        }
+        texture.destroy();
+        Ok(())
+    }
+
     fn write_texture(&self, info: TextureWriteInfo, bytes: &[u8]) -> Result<(), String> {
         let resources = self
             .resources
@@ -498,6 +520,16 @@ impl NativeWebGpuContext {
             .samplers
             .insert(id, sampler);
         Ok(id)
+    }
+
+    fn destroy_sampler(&self, id: u64) -> Result<(), String> {
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .samplers
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| format!("unknown GPUSampler handle {id}"))
     }
 
     fn create_bind_group_layout(&self, descriptor: &Value) -> Result<u64, String> {
@@ -1403,6 +1435,20 @@ pub fn register_bindings(
         },
     )?;
 
+    let destroy_texture_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDestroyTexture",
+        1,
+        move |_this, args, context| {
+            let id = number_arg(args, 0, context)? as u64;
+            destroy_texture_gpu
+                .destroy_texture(id)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
     let write_texture_gpu = gpu.clone();
     register(
         context,
@@ -1511,6 +1557,20 @@ pub fn register_bindings(
         "__hyperthreeWebGpuCreateSampler",
         sampler_gpu,
         |gpu, descriptor| gpu.create_sampler(descriptor),
+    )?;
+
+    let destroy_sampler_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDestroySampler",
+        1,
+        move |_this, args, context| {
+            let id = number_arg(args, 0, context)? as u64;
+            destroy_sampler_gpu
+                .destroy_sampler(id)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
     )?;
 
     let bind_group_layout_gpu = gpu.clone();
@@ -2899,7 +2959,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     );
     return makeHandle(id, {
       createView: (viewDescriptor = {}) => makeHandle(__hyperthreeWebGpuCreateTextureView(id, descriptorJson(viewDescriptor)), { __textureView: true }),
-      destroy: () => {},
+      destroy: () => __hyperthreeWebGpuDestroyTexture(id),
     });
   };
   const makeSurfaceTexture = () => {
@@ -3075,7 +3135,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         return makeHandle(__hyperthreeWebGpuCreateBindGroup(descriptorJson(normalized)));
       },
       createSampler(descriptor = {}) {
-        return makeHandle(__hyperthreeWebGpuCreateSampler(descriptorJson(descriptor)), { __sampler: true });
+        const id = __hyperthreeWebGpuCreateSampler(descriptorJson(descriptor));
+        return makeHandle(id, { __sampler: true, destroy: () => __hyperthreeWebGpuDestroySampler(id) });
       },
       createRenderPipeline(descriptor = {}) {
         const id = __hyperthreeWebGpuCreateRenderPipeline(descriptorJson(normalizePipelineDescriptor(descriptor)));
@@ -3127,7 +3188,14 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },
         });
       },
-      pushErrorScope() {}, popErrorScope: async () => null,
+      pushErrorScope(filter) {
+        if (!this.__hyperthreeErrorScopes) this.__hyperthreeErrorScopes = [];
+        this.__hyperthreeErrorScopes.push(filter);
+      },
+      async popErrorScope() {
+        if (this.__hyperthreeErrorScopes) this.__hyperthreeErrorScopes.pop();
+        return null;
+      },
       // The promise remains pending until the native host reports a real
       // device-loss event. Resolving it during initialization makes Three.js
       // treat every healthy device as lost.

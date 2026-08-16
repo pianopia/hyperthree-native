@@ -40,6 +40,7 @@ globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
+globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
 window.addEventListener("resize", () => { globalThis.__gltfResizeEvent = window.innerWidth === 960 && window.innerHeight === 540; });
 globalThis.__gltfSmokeStage = "before-adapter";
@@ -59,6 +60,14 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   readbackBuffer.unmap();
   sourceBuffer.destroy();
   readbackBuffer.destroy();
+  device.pushErrorScope("validation");
+  const errorScope = await device.popErrorScope();
+  const temporaryTexture = device.createTexture({ size: { width: 1, height: 1 }, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  temporaryTexture.createView();
+  temporaryTexture.destroy();
+  const temporarySampler = device.createSampler();
+  temporarySampler.destroy();
+  globalThis.__gltfResourceLifecycleSmoke = errorScope === null;
   const renderer = new WebGPURenderer({ canvas: globalThis.__hyperthreeNativeCanvas, antialias: false });
   globalThis.__gltfSmokeStage = "before-renderer-init";
   await renderer.init();
@@ -112,6 +121,7 @@ globalThis.HyperThreeGame = {
     if (!globalThis.__gltfResizeEvent) throw new Error("native resize event did not settle");
     if (!globalThis.__gltfFeatureSmoke) throw new Error("InstancedMesh/Line/Sprite smoke did not settle");
     if (!globalThis.__gltfReadbackSmoke) throw new Error("GPUBuffer readback smoke did not settle");
+    if (!globalThis.__gltfResourceLifecycleSmoke) throw new Error("GPU resource lifecycle smoke did not settle");
     if (!globalThis.__gltfSmokeRendered) throw new Error("GLTF WebGPU render smoke did not settle");
   },
   onStop() {},

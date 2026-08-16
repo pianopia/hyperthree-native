@@ -37,6 +37,7 @@
 - [x] Three.js 0.179 GLTFLoader GLB, external-buffer, external-PNG texture, and canvas-resize fixture
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, Line, and Sprite fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
+- [x] WebGPU texture/sampler destroy and error-scope lifecycle fixture
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
