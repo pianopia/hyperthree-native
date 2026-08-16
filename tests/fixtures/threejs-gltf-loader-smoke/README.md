@@ -11,6 +11,8 @@ It also constructs `PositionalAudio` and exercises native panner position and
 playback parameter propagation without requiring a physical audio device.
 The fixture also routes a standard Three.js `Audio` object through a
 `BiquadFilterNode` and verifies the filter graph properties.
+It constructs `AudioAnalyser` as a second connection from the audio output and
+verifies native frequency-data and average-frequency reads.
 `SkinnedMesh`/`Skeleton` objects,
 advances an `AnimationMixer`, renders `InstancedMesh`/`Line`/`Sprite` objects,
 `BatchedMesh`, shadows, an equirectangular environment, an MRT target, and an

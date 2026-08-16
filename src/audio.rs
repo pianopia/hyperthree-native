@@ -2,7 +2,12 @@ use anyhow::{anyhow, Result};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Source, SpatialSink};
 use serde::Deserialize;
 use std::f32::consts::PI;
-use std::{collections::HashMap, io::Cursor, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    io::Cursor,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
 
@@ -23,6 +28,7 @@ pub struct AudioPlayback {
     pub duration: f64,
     pub speed: f32,
     pub filters: Vec<AudioFilter>,
+    pub analysers: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -33,6 +39,163 @@ pub struct AudioFilter {
     pub q: f32,
     pub gain: f32,
     pub detune: f32,
+}
+
+const DEFAULT_ANALYSER_FFT_SIZE: usize = 2048;
+const MAX_ANALYSER_FFT_SIZE: usize = 32768;
+
+struct AnalyserState {
+    fft_size: usize,
+    smoothing_time_constant: f32,
+    min_decibels: f32,
+    max_decibels: f32,
+    samples: VecDeque<f32>,
+    frame_sum: f32,
+    frame_channel: usize,
+    channels: usize,
+    previous_frequency: Vec<f32>,
+}
+
+impl Default for AnalyserState {
+    fn default() -> Self {
+        Self {
+            fft_size: DEFAULT_ANALYSER_FFT_SIZE,
+            smoothing_time_constant: 0.8,
+            min_decibels: -100.0,
+            max_decibels: -30.0,
+            samples: VecDeque::with_capacity(MAX_ANALYSER_FFT_SIZE * 2),
+            frame_sum: 0.0,
+            frame_channel: 0,
+            channels: 1,
+            previous_frequency: vec![0.0; DEFAULT_ANALYSER_FFT_SIZE / 2],
+        }
+    }
+}
+
+impl AnalyserState {
+    fn configure(
+        &mut self,
+        fft_size: usize,
+        smoothing_time_constant: f32,
+        min_decibels: f32,
+        max_decibels: f32,
+    ) {
+        self.fft_size = sanitize_fft_size(fft_size);
+        self.smoothing_time_constant = smoothing_time_constant.clamp(0.0, 1.0);
+        self.min_decibels = min_decibels.min(max_decibels - 0.001);
+        self.max_decibels = max_decibels.max(self.min_decibels + 0.001);
+        self.previous_frequency.resize(self.fft_size / 2, 0.0);
+    }
+
+    fn push_sample(&mut self, sample: f32, channel: usize, channels: usize) {
+        if channel == 0 {
+            self.frame_sum = 0.0;
+            self.channels = channels.max(1);
+        }
+        self.frame_sum += sample;
+        if channel + 1 >= self.channels {
+            self.samples
+                .push_back(self.frame_sum / self.channels as f32);
+            let max_samples = MAX_ANALYSER_FFT_SIZE * 2;
+            while self.samples.len() > max_samples {
+                self.samples.pop_front();
+            }
+            self.frame_channel = 0;
+        } else {
+            self.frame_channel = channel + 1;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.frame_sum = 0.0;
+        self.frame_channel = 0;
+        self.previous_frequency.fill(0.0);
+    }
+
+    fn read_frequency(&mut self, output_len: usize) -> Vec<u8> {
+        let magnitudes = self.fft_magnitudes();
+        let mut output = vec![0; output_len];
+        let smoothing = self.smoothing_time_constant;
+        for (index, value) in magnitudes.into_iter().take(output_len).enumerate() {
+            let smoothed = smoothing * self.previous_frequency[index] + (1.0 - smoothing) * value;
+            self.previous_frequency[index] = smoothed;
+            output[index] = decibel_to_byte(smoothed, self.min_decibels, self.max_decibels);
+        }
+        output
+    }
+
+    fn read_time_domain(&self, output_len: usize) -> Vec<u8> {
+        let start = self.samples.len().saturating_sub(output_len);
+        let values = self.samples.iter().skip(start);
+        let mut output = vec![128; output_len];
+        for (index, sample) in values.enumerate().take(output_len) {
+            output[index] = (((sample.clamp(-1.0, 1.0) + 1.0) * 127.5).round()) as u8;
+        }
+        output
+    }
+
+    fn fft_magnitudes(&self) -> Vec<f32> {
+        let size = self.fft_size;
+        let mut values = vec![(0.0_f32, 0.0_f32); size];
+        let start = self.samples.len().saturating_sub(size);
+        for (index, sample) in self.samples.iter().skip(start).enumerate() {
+            let window = 0.5 - 0.5 * (2.0 * PI * index as f32 / size as f32).cos();
+            values[index].0 = sample * window;
+        }
+        let mut j = 0;
+        for i in 1..size {
+            let mut bit = size >> 1;
+            while j & bit != 0 {
+                j ^= bit;
+                bit >>= 1;
+            }
+            j ^= bit;
+            if i < j {
+                values.swap(i, j);
+            }
+        }
+        let mut length = 2;
+        while length <= size {
+            let angle = -2.0 * PI / length as f32;
+            let (sin, cos) = angle.sin_cos();
+            for offset in (0..size).step_by(length) {
+                let mut wr = 1.0;
+                let mut wi = 0.0;
+                for index in 0..length / 2 {
+                    let even = values[offset + index];
+                    let odd = values[offset + index + length / 2];
+                    let tr = wr * odd.0 - wi * odd.1;
+                    let ti = wr * odd.1 + wi * odd.0;
+                    values[offset + index] = (even.0 + tr, even.1 + ti);
+                    values[offset + index + length / 2] = (even.0 - tr, even.1 - ti);
+                    let next_wr = wr * cos - wi * sin;
+                    wi = wr * sin + wi * cos;
+                    wr = next_wr;
+                }
+            }
+            length <<= 1;
+        }
+        values
+            .into_iter()
+            .take(size / 2)
+            .map(|(real, imaginary)| {
+                let magnitude = (real * real + imaginary * imaginary).sqrt() / size as f32;
+                20.0 * magnitude.max(1.0e-12).log10()
+            })
+            .collect()
+    }
+}
+
+fn sanitize_fft_size(value: usize) -> usize {
+    value
+        .clamp(32, MAX_ANALYSER_FFT_SIZE)
+        .next_power_of_two()
+        .min(MAX_ANALYSER_FFT_SIZE)
+}
+
+fn decibel_to_byte(value: f32, min_decibels: f32, max_decibels: f32) -> u8 {
+    (((value - min_decibels) / (max_decibels - min_decibels)).clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 pub fn decode_audio(bytes: &[u8]) -> Result<DecodedAudio> {
@@ -70,8 +233,10 @@ pub struct AudioEngine {
     output_stream: Option<OutputStream>,
     output_handle: Option<OutputStreamHandle>,
     sinks: HashMap<u64, SpatialSink>,
+    analysers: HashMap<u64, Arc<Mutex<AnalyserState>>>,
     listener_position: [f32; 3],
     next_id: u64,
+    next_analyser_id: u64,
 }
 
 impl Default for AudioEngine {
@@ -80,8 +245,10 @@ impl Default for AudioEngine {
             output_stream: None,
             output_handle: None,
             sinks: HashMap::new(),
+            analysers: HashMap::new(),
             listener_position: [0.0, 0.0, 0.0],
             next_id: 1,
+            next_analyser_id: 1,
         }
     }
 }
@@ -118,6 +285,11 @@ impl AudioEngine {
         .map_err(|error| anyhow!("failed to create native audio source: {error}"))?;
         sink.set_volume(playback.volume.clamp(0.0, 4.0));
         sink.set_speed(sanitize_speed(playback.speed));
+        let analyser_taps = playback
+            .analysers
+            .iter()
+            .filter_map(|id| self.analysers.get(id).cloned())
+            .collect::<Vec<_>>();
         let source_bytes = Cursor::new(bytes);
         if playback.looped {
             append_source(
@@ -128,6 +300,7 @@ impl AudioEngine {
                 playback.offset,
                 playback.duration,
                 &playback.filters,
+                &analyser_taps,
             );
         } else {
             append_source(
@@ -138,6 +311,7 @@ impl AudioEngine {
                 playback.offset,
                 playback.duration,
                 &playback.filters,
+                &analyser_taps,
             );
         }
         sink.play();
@@ -192,6 +366,50 @@ impl AudioEngine {
             sink.set_right_ear_position(right);
         }
     }
+
+    pub fn create_analyser(&mut self) -> u64 {
+        let id = self.next_analyser_id;
+        self.next_analyser_id = self.next_analyser_id.wrapping_add(1).max(1);
+        self.analysers
+            .insert(id, Arc::new(Mutex::new(AnalyserState::default())));
+        id
+    }
+
+    pub fn configure_analyser(
+        &mut self,
+        id: u64,
+        fft_size: usize,
+        smoothing_time_constant: f32,
+        min_decibels: f32,
+        max_decibels: f32,
+    ) {
+        if let Some(analyser) = self.analysers.get(&id) {
+            if let Ok(mut analyser) = analyser.lock() {
+                analyser.configure(
+                    fft_size,
+                    smoothing_time_constant,
+                    min_decibels,
+                    max_decibels,
+                );
+            }
+        }
+    }
+
+    pub fn read_analyser_frequency(&self, id: u64, length: usize) -> Vec<u8> {
+        self.analysers
+            .get(&id)
+            .and_then(|analyser| analyser.lock().ok())
+            .map(|mut analyser| analyser.read_frequency(length))
+            .unwrap_or_else(|| vec![0; length])
+    }
+
+    pub fn read_analyser_time_domain(&self, id: u64, length: usize) -> Vec<u8> {
+        self.analysers
+            .get(&id)
+            .and_then(|analyser| analyser.lock().ok())
+            .map(|analyser| analyser.read_time_domain(length))
+            .unwrap_or_else(|| vec![128; length])
+    }
 }
 
 fn append_source<S>(
@@ -201,6 +419,7 @@ fn append_source<S>(
     offset: f64,
     duration: f64,
     filters: &[AudioFilter],
+    analysers: &[Arc<Mutex<AnalyserState>>],
 ) where
     S: Source<Item = i16> + Send + 'static,
 {
@@ -212,7 +431,8 @@ fn append_source<S>(
         Duration::MAX
     };
     let source = FilterSource::new(source.convert_samples::<f32>(), filters);
-    sink.append(source.delay(delay).skip_duration(skip).take_duration(take));
+    let source = source.delay(delay).skip_duration(skip).take_duration(take);
+    sink.append(AnalyserTap::new(source, analysers));
 }
 
 struct FilterSource<S> {
@@ -266,6 +486,81 @@ where
 }
 
 impl<S> Source for FilterSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        self.input.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.input.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.input.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.input.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.input.try_seek(pos)?;
+        self.reset();
+        Ok(())
+    }
+}
+
+struct AnalyserTap<S> {
+    input: S,
+    analysers: Vec<Arc<Mutex<AnalyserState>>>,
+    channel: usize,
+    channels: usize,
+}
+
+impl<S> AnalyserTap<S>
+where
+    S: Source<Item = f32>,
+{
+    fn new(input: S, analysers: &[Arc<Mutex<AnalyserState>>]) -> Self {
+        Self {
+            channels: input.channels().max(1) as usize,
+            input,
+            analysers: analysers.to_vec(),
+            channel: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.channel = 0;
+        for analyser in &self.analysers {
+            if let Ok(mut analyser) = analyser.lock() {
+                analyser.reset();
+            }
+        }
+    }
+}
+
+impl<S> Iterator for AnalyserTap<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.input.next()?;
+        for analyser in &self.analysers {
+            if let Ok(mut analyser) = analyser.lock() {
+                analyser.push_sample(sample, self.channel, self.channels);
+            }
+        }
+        self.channel = (self.channel + 1) % self.channels;
+        Some(sample)
+    }
+}
+
+impl<S> Source for AnalyserTap<S>
 where
     S: Source<Item = f32>,
 {
@@ -506,5 +801,19 @@ mod tests {
             };
             assert!(super::Biquad::new(&filter, 48_000, 2).is_some(), "{kind}");
         }
+    }
+
+    #[test]
+    fn analyser_fft_and_time_domain_data_follow_native_samples() {
+        let mut analyser = super::AnalyserState::default();
+        analyser.configure(32, 0.0, -100.0, 0.0);
+        for _ in 0..32 {
+            analyser.push_sample(1.0, 0, 1);
+        }
+        let frequency = analyser.read_frequency(16);
+        let time_domain = analyser.read_time_domain(32);
+        assert_eq!(frequency.len(), 16);
+        assert!(frequency.iter().any(|value| *value > 0));
+        assert!(time_domain.iter().all(|value| *value == 255));
     }
 }

@@ -83,6 +83,7 @@ globalThis.__gltfKtx2NativeHook = false;
 globalThis.__gltfUastcKtx2Loaded = false;
 globalThis.__gltfAudioLoaded = false;
 globalThis.__gltfAudioFilter = false;
+globalThis.__gltfAudioAnalyser = false;
 globalThis.__gltfPositionalAudio = false;
 globalThis.__gltfBasisKtx2Loaded = false;
 globalThis.__gltfDracoLoaded = false;
@@ -189,6 +190,10 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       sound.setFilters([filter]);
       globalThis.__gltfAudioFilter = sound.getFilter() === filter &&
         filter.type === 'lowpass' && filter.frequency.value === 900 && filter.Q.value === 0.7;
+      const analyser = new THREE.AudioAnalyser(sound, 32);
+      const frequencyData = analyser.getFrequencyData();
+      globalThis.__gltfAudioAnalyser = frequencyData.length === 16 &&
+        analyser.getAverageFrequency() >= 0;
       const positional = new THREE.PositionalAudio(listener);
       positional.setBuffer(audioBuffer);
       positional.setRefDistance(2);
@@ -300,7 +305,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfPositionalAudio ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

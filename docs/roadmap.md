@@ -14,6 +14,7 @@
 - [x] Boa ES module execution with relative and `node_modules` resolution
 - [x] Native `performance.now()` and requestAnimationFrame compatibility loop
 - [x] Native Web Audio decode/playback bridge, AudioContext/Gain/Panner/BiquadFilter graph, playback-rate/detune, spatial sink position, and Blob/File/object-URL asset boundary
+- [x] Native AudioAnalyser FFT/time-domain tap and Three.js AudioAnalyser fixture
 - [x] Project-sandboxed localStorage/sessionStorage with restart persistence
 - [x] Origin-private File System Access API slice (navigator.storage.getDirectory, file handles, writable streams, listing, removal)
 - [ ] Cross-platform audio-device/spatial-DSP validation

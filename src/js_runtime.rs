@@ -988,7 +988,7 @@ impl JsRuntime {
 
         let audio_engine_for_play = audio_engine.clone();
         context
-            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 8, unsafe {
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 9, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
                     let looped = args.get_or_undefined(1).to_boolean();
@@ -1011,6 +1011,18 @@ impl JsRuntime {
                         })
                         .transpose()?
                         .unwrap_or_default();
+                    let analysers: Vec<u64> = optional_string_arg(args, 8, context)?
+                        .map(|value| {
+                            serde_json::from_str::<Vec<u64>>(&value).map_err(|error| -> JsError {
+                                JsNativeError::syntax()
+                                    .with_message(format!(
+                                        "invalid native audio analyser graph: {error}"
+                                    ))
+                                    .into()
+                            })
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
                     let id = audio_engine_for_play
                         .borrow_mut()
                         .play(
@@ -1023,6 +1035,7 @@ impl JsRuntime {
                                 duration,
                                 speed,
                                 filters,
+                                analysers,
                             },
                         )
                         .map_err(|error| {
@@ -1083,6 +1096,110 @@ impl JsRuntime {
                 })
             })
             .map_err(|error| anyhow::anyhow!("failed to register audio speed binding: {error}"))?;
+
+        let audio_engine_for_analyser_create = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioAnalyserCreate"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, _context| {
+                        Ok(JsValue::from(
+                            audio_engine_for_analyser_create
+                                .borrow_mut()
+                                .create_analyser() as f64,
+                        ))
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio analyser create binding: {error}")
+            })?;
+
+        let audio_engine_for_analyser_configure = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioAnalyserConfigure"),
+                5,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        let fft_size = nonnegative_usize_arg(args, 1, context)?;
+                        let smoothing = number_arg(args, 2, context)? as f32;
+                        let min_decibels = number_arg(args, 3, context)? as f32;
+                        let max_decibels = number_arg(args, 4, context)? as f32;
+                        audio_engine_for_analyser_configure
+                            .borrow_mut()
+                            .configure_analyser(
+                                id,
+                                fft_size,
+                                smoothing,
+                                min_decibels,
+                                max_decibels,
+                            );
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio analyser configure binding: {error}")
+            })?;
+
+        let audio_engine_for_analyser_frequency = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioAnalyserFrequency"),
+                2,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        let length = nonnegative_usize_arg(args, 1, context)?;
+                        let bytes = audio_engine_for_analyser_frequency
+                            .borrow()
+                            .read_analyser_frequency(id, length);
+                        JsArrayBuffer::from_byte_block(AlignedVec::from_iter(0, bytes), context)
+                            .map(JsValue::from)
+                            .map_err(|error| {
+                                JsNativeError::error()
+                                    .with_message(format!(
+                                        "failed to read audio frequency data: {error}"
+                                    ))
+                                    .into()
+                            })
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio analyser frequency binding: {error}")
+            })?;
+
+        let audio_engine_for_analyser_time = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioAnalyserTimeDomain"),
+                2,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        let length = nonnegative_usize_arg(args, 1, context)?;
+                        let bytes = audio_engine_for_analyser_time
+                            .borrow()
+                            .read_analyser_time_domain(id, length);
+                        JsArrayBuffer::from_byte_block(AlignedVec::from_iter(0, bytes), context)
+                            .map(JsValue::from)
+                            .map_err(|error| {
+                                JsNativeError::error()
+                                    .with_message(format!(
+                                        "failed to read audio time-domain data: {error}"
+                                    ))
+                                    .into()
+                            })
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio analyser time-domain binding: {error}")
+            })?;
 
         let audio_engine_for_position = audio_engine.clone();
         context
@@ -1711,20 +1828,39 @@ impl JsRuntime {
                   }
                 };
                 globalThis.AudioNode = globalThis.AudioNode || class AudioNode {
-                  constructor(context) { this.context = context; this._destination = null; }
-                  connect(destination) { this._destination = destination; return destination; }
-                  disconnect() { this._destination = null; }
+                  constructor(context) { this.context = context; this._destination = null; this._destinations = []; }
+                  connect(destination) {
+                    if (!this._destinations.includes(destination)) this._destinations.push(destination);
+                    if (!this._destination) this._destination = destination;
+                    return destination;
+                  }
+                  disconnect(destination) {
+                    if (destination === undefined) {
+                      this._destinations = [];
+                      this._destination = null;
+                    } else {
+                      this._destinations = this._destinations.filter((candidate) => candidate !== destination);
+                      if (this._destination === destination) this._destination = this._destinations[0] || null;
+                    }
+                  }
                 };
                 const registerAudioSource = (node, id) => {
-                  if (!node) return;
-                  if (node.__hyperthreeSourceIds && !node.__hyperthreeSourceIds.includes(id)) node.__hyperthreeSourceIds.push(id);
-                  if (node._destination && node._destination !== node) registerAudioSource(node._destination, id);
-                  if (node.__hyperthreeRegisterSource) node.__hyperthreeRegisterSource(id);
+                  const visited = new Set();
+                  const visit = (current) => {
+                    if (!current || visited.has(current)) return;
+                    visited.add(current);
+                    if (current.__hyperthreeSourceIds && !current.__hyperthreeSourceIds.includes(id)) current.__hyperthreeSourceIds.push(id);
+                    if (current.__hyperthreeRegisterSource) current.__hyperthreeRegisterSource(id);
+                    const destinations = current._destinations?.length ? current._destinations : (current._destination ? [current._destination] : []);
+                    for (const destination of destinations) visit(destination);
+                  };
+                  visit(node);
                 };
                 const audioGraph = (node) => {
                   let current = node;
                   let volume = 1;
                   const filters = [];
+                  const analysers = new Set();
                   for (let depth = 0; depth < 16 && current; depth += 1) {
                     if (current.gain?.value !== undefined && !current.__hyperthreeBiquadFilter) volume *= Number(current.gain.value);
                     if (current.__hyperthreeBiquadFilter) filters.push({
@@ -1736,7 +1872,16 @@ impl JsRuntime {
                     });
                     current = current._destination;
                   }
-                  return { volume, filters };
+                  const visited = new Set();
+                  const collectAnalysers = (currentNode) => {
+                    if (!currentNode || visited.has(currentNode)) return;
+                    visited.add(currentNode);
+                    if (currentNode.__hyperthreeAnalyserId !== undefined) analysers.add(currentNode.__hyperthreeAnalyserId);
+                    const destinations = currentNode._destinations?.length ? currentNode._destinations : (currentNode._destination ? [currentNode._destination] : []);
+                    for (const destination of destinations) collectAnalysers(destination);
+                  };
+                  collectAnalysers(node);
+                  return { volume, filters, analysers: Array.from(analysers) };
                 };
                 globalThis.GainNode = globalThis.GainNode || class GainNode extends AudioNode {
                   constructor(context) {
@@ -1757,6 +1902,64 @@ impl JsRuntime {
                     this.detune = makeAudioParam(this, 0);
                     this.Q = makeAudioParam(this, 1);
                     this.gain = makeAudioParam(this, 0);
+                  }
+                };
+                globalThis.AnalyserNode = globalThis.AnalyserNode || class AnalyserNode extends AudioNode {
+                  constructor(context) {
+                    super(context);
+                    this.__hyperthreeAnalyserId = __hyperthreeAudioAnalyserCreate();
+                    this._fftSize = 2048;
+                    this._smoothingTimeConstant = 0.8;
+                    this._minDecibels = -100;
+                    this._maxDecibels = -30;
+                    this.frequencyBinCount = 1024;
+                    const configure = () => __hyperthreeAudioAnalyserConfigure(
+                      this.__hyperthreeAnalyserId,
+                      this._fftSize,
+                      this._smoothingTimeConstant,
+                      this._minDecibels,
+                      this._maxDecibels,
+                    );
+                    Object.defineProperties(this, {
+                      fftSize: {
+                        get: () => this._fftSize,
+                        set: (value) => {
+                          const numeric = Math.max(32, Math.min(32768, Number(value) || 2048));
+                          this._fftSize = 2 ** Math.round(Math.log2(numeric));
+                          this.frequencyBinCount = this._fftSize / 2;
+                          configure();
+                        },
+                      },
+                      smoothingTimeConstant: {
+                        get: () => this._smoothingTimeConstant,
+                        set: (value) => { this._smoothingTimeConstant = Math.max(0, Math.min(1, Number(value))); configure(); },
+                      },
+                      minDecibels: {
+                        get: () => this._minDecibels,
+                        set: (value) => { this._minDecibels = Number(value); configure(); },
+                      },
+                      maxDecibels: {
+                        get: () => this._maxDecibels,
+                        set: (value) => { this._maxDecibels = Number(value); configure(); },
+                      },
+                    });
+                    configure();
+                  }
+                  getByteFrequencyData(array) {
+                    const bytes = new Uint8Array(__hyperthreeAudioAnalyserFrequency(this.__hyperthreeAnalyserId, array.length));
+                    array.set(bytes.subarray(0, array.length));
+                  }
+                  getFloatFrequencyData(array) {
+                    const bytes = new Uint8Array(__hyperthreeAudioAnalyserFrequency(this.__hyperthreeAnalyserId, array.length));
+                    for (let index = 0; index < array.length; index += 1) array[index] = this._minDecibels + (bytes[index] || 0) / 255 * (this._maxDecibels - this._minDecibels);
+                  }
+                  getByteTimeDomainData(array) {
+                    const bytes = new Uint8Array(__hyperthreeAudioAnalyserTimeDomain(this.__hyperthreeAnalyserId, array.length));
+                    array.set(bytes.subarray(0, array.length));
+                  }
+                  getFloatTimeDomainData(array) {
+                    const bytes = new Uint8Array(__hyperthreeAudioAnalyserTimeDomain(this.__hyperthreeAnalyserId, array.length));
+                    for (let index = 0; index < array.length; index += 1) array[index] = ((bytes[index] || 128) - 128) / 128;
                   }
                 };
                 globalThis.AudioBufferSourceNode = globalThis.AudioBufferSourceNode || class AudioBufferSourceNode extends AudioNode {
@@ -1784,7 +1987,7 @@ impl JsRuntime {
                     const destination = this._destination;
                     const graph = audioGraph(destination);
                     const speed = Number(this.playbackRate.value) * Math.pow(2, Number(this.detune.value) / 1200);
-                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, graph.volume, when, offset, duration, speed, JSON.stringify(graph.filters));
+                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, graph.volume, when, offset, duration, speed, JSON.stringify(graph.filters), JSON.stringify(graph.analysers));
                     this.__hyperthreeAudioId = id;
                     registerAudioSource(destination, id);
                   }
@@ -1859,6 +2062,7 @@ impl JsRuntime {
                   createGain() { return new GainNode(this); }
                   createPanner() { return new PannerNode(this); }
                   createBiquadFilter() { return new BiquadFilterNode(this); }
+                  createAnalyser() { return new AnalyserNode(this); }
                   resume() { this.state = 'running'; return Promise.resolve(); }
                   suspend() { this.state = 'suspended'; return Promise.resolve(); }
                   close() { this.state = 'closed'; return Promise.resolve(); }
@@ -3334,6 +3538,7 @@ mod tests {
                     const gain = context.createGain();
                     const panner = context.createPanner();
                     const filter = context.createBiquadFilter();
+                    const analyser = context.createAnalyser();
                     const source = context.createBufferSource();
                     source.buffer = audioBuffer;
                     filter.type = 'highpass';
@@ -3343,6 +3548,10 @@ mod tests {
                     filter.connect(panner);
                     panner.connect(gain);
                     gain.connect(context.destination);
+                    gain.connect(analyser);
+                    analyser.fftSize = 32;
+                    const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(frequencyData);
                     gain.gain.setValueAtTime(0.5, context.currentTime);
                     source.playbackRate.setValueAtTime(1.25, context.currentTime);
                     source.detune.setValueAtTime(1200, context.currentTime);
@@ -3355,7 +3564,8 @@ mod tests {
                       typeof source.start === 'function' && typeof source.stop === 'function' &&
                       source.playbackRate.value === 1.25 && source.detune.value === 1200 &&
                       panner.positionX.value === 2 && panner.positionY.value === 3 && panner.positionZ.value === -4 &&
-                      filter.type === 'highpass' && filter.frequency.value === 440 && filter.Q.value === 0.8;
+                      filter.type === 'highpass' && filter.frequency.value === 440 && filter.Q.value === 0.8 &&
+                      analyser.frequencyBinCount === 16 && frequencyData.length === 16;
                   });
                 "#,
             )
