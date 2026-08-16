@@ -2382,6 +2382,7 @@ impl JsRuntime {
                     return [{ offset: 0, stride: this.displayWidth * 4 }];
                   }
                 };
+                globalThis.__hyperthreeNativeDracoAvailable = true;
                 globalThis.__hyperthreeMeshoptDecoder = globalThis.__hyperthreeMeshoptDecoder || {
                   supported: true,
                   ready: Promise.resolve(),
@@ -2565,6 +2566,96 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn method_body_range(source: &str, marker: &str, search_from: usize) -> Option<(usize, usize)> {
+    let method_start = source[search_from..].find(marker)? + search_from;
+    let parameter_open = method_start + marker.len() - 1;
+    let bytes = source.as_bytes();
+    let parameter_close = matching_delimiter(bytes, parameter_open, b'(', b')')?;
+    let body_open = next_code_byte(bytes, parameter_close + 1, bytes.len(), b'{')?;
+    let body_close = matching_delimiter(bytes, body_open, b'{', b'}')?;
+    Some((body_open, body_close))
+}
+
+fn inject_minified_draco_preload_guard(source: &mut String) -> bool {
+    let mut search_from = 0;
+    while let Some((body_open, body_close)) = method_body_range(source, "preload(", search_from) {
+        if source[body_open..body_close].contains("_initDecoder") {
+            if source[body_open..body_close].contains("__hyperthreeDecodeDraco") {
+                return false;
+            }
+            source.insert_str(
+                body_open + 1,
+                "if(typeof globalThis.__hyperthreeDecodeDraco==='function')return this;",
+            );
+            return true;
+        }
+        search_from = body_close + 1;
+    }
+    false
+}
+
+fn inject_minified_draco_decode_hook(source: &mut String) -> bool {
+    let mut search_from = 0;
+    while let Some((body_open, body_close)) =
+        method_body_range(source, "decodeDracoFile(", search_from)
+    {
+        if source[body_open..body_close].contains("__hyperthreeDracoNativeCalls") {
+            return false;
+        }
+
+        let method_start = source[search_from..]
+            .find("decodeDracoFile(")
+            .expect("method body range was found")
+            + search_from;
+        let parameter_open = method_start + "decodeDracoFile".len();
+        let parameters_end = source[parameter_open + 1..]
+            .find(')')
+            .expect("method parameter list was found")
+            + parameter_open
+            + 1;
+        let parameters = source[parameter_open + 1..parameters_end]
+            .split(',')
+            .filter_map(|parameter| parameter.split('=').next())
+            .map(str::trim)
+            .filter(|parameter| {
+                let mut characters = parameter.chars();
+                let Some(first) = characters.next() else {
+                    return false;
+                };
+                (first.is_ascii_alphabetic() || first == '_' || first == '$')
+                    && characters.all(|character| {
+                        character.is_ascii_alphanumeric() || character == '_' || character == '$'
+                    })
+            })
+            .collect::<Vec<_>>();
+        if parameters.len() < 2 {
+            search_from = body_close + 1;
+            continue;
+        }
+
+        let buffer = parameters[0];
+        let callback = parameters[1];
+        let attribute_types = parameters.get(3).copied().unwrap_or("undefined");
+        let vertex_color_space = parameters.get(4).copied().unwrap_or("undefined");
+        let on_error = parameters.get(5).copied().unwrap_or("undefined");
+        let mut hook = String::from(
+            "if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const __htDracoResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(__HT_BUFFER__));const __htRequestedTypes=__HT_ATTRIBUTE_TYPES||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htDracoResult.attributes){const __htTypeName=__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htNativeAttribute.name,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:__HT_VERTEX_COLOR_SPACE});}const __htGeometry=this._createGeometry({index:{array:new Uint32Array(__htDracoResult.index)},attributes:__htAttributes});return Promise.resolve(__htGeometry).then(__HT_CALLBACK).catch(__HT_ON_ERROR);}catch(__htError){return Promise.reject(__htError).catch(__HT_ON_ERROR);}}",
+        );
+        for (placeholder, value) in [
+            ("__HT_BUFFER__", buffer),
+            ("__HT_CALLBACK", callback),
+            ("__HT_ATTRIBUTE_TYPES", attribute_types),
+            ("__HT_VERTEX_COLOR_SPACE", vertex_color_space),
+            ("__HT_ON_ERROR", on_error),
+        ] {
+            hook = hook.replace(placeholder, value);
+        }
+        source.insert_str(body_open + 1, &hook);
+        return true;
+    }
+    false
+}
+
 fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, str> {
     let minified = "}get(e){let t=this.weakMap;";
     let readable = "get( keys ) {\n\n\t\tlet map = this.weakMap;";
@@ -2619,11 +2710,11 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         for (from, to) in [
             (
                 "this.dracoLoader.preload();",
-                "if ( ! globalThis.__hyperthreeDecodeDraco ) this.dracoLoader.preload();",
+                "if ( typeof globalThis.__hyperthreeDecodeDraco !== 'function' ) this.dracoLoader.preload();",
             ),
             (
                 "this.dracoLoader.preload()",
-                "globalThis.__hyperthreeDecodeDraco ? this.dracoLoader : this.dracoLoader.preload()",
+                "typeof globalThis.__hyperthreeDecodeDraco === 'function' ? this.dracoLoader : this.dracoLoader.preload()",
             ),
         ] {
             if normalized.contains(from) {
@@ -2661,16 +2752,24 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
     if is_draco_loader_bundle {
         for (from, to) in [
             (
+                "_initDecoder() {\n\n\t\tif ( this.decoderPending ) return this.decoderPending;",
+                "_initDecoder() {\n\n\t\tif ( typeof globalThis.__hyperthreeDecodeDraco === 'function' ) return Promise.resolve( this );\n\n\t\tif ( this.decoderPending ) return this.decoderPending;",
+            ),
+            (
+                "_initDecoder(){if(this.decoderPending)return this.decoderPending;",
+                "_initDecoder(){if(typeof globalThis.__hyperthreeDecodeDraco==='function')return Promise.resolve(this);if(this.decoderPending)return this.decoderPending;",
+            ),
+            (
                 "preload() {\n\n\t\tthis._initDecoder();",
-                "preload() {\n\n\t\tif ( globalThis.__hyperthreeDecodeDraco ) return this;\n\n\t\tthis._initDecoder();",
+                "preload() {\n\n\t\tif ( typeof globalThis.__hyperthreeDecodeDraco === 'function' ) return this;\n\n\t\tthis._initDecoder();",
             ),
             (
                 "preload() {\n      this._initDecoder();",
-                "preload() {\n      if ( globalThis.__hyperthreeDecodeDraco ) return this;\n      this._initDecoder();",
+                "preload() {\n      if ( typeof globalThis.__hyperthreeDecodeDraco === 'function' ) return this;\n      this._initDecoder();",
             ),
             (
                 "preload(){return this._initDecoder(),this}",
-                "preload(){if(globalThis.__hyperthreeDecodeDraco)return this;return this._initDecoder(),this}",
+                "preload(){if(typeof globalThis.__hyperthreeDecodeDraco==='function')return this;return this._initDecoder(),this}",
             ),
         ] {
             if normalized.contains(from) {
@@ -2681,7 +2780,7 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         let from = r#"decodeDracoFile( buffer, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {} ) {"#;
         let to = r#"decodeDracoFile( buffer, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {} ) {
 
-		if ( globalThis.__hyperthreeDecodeDraco ) {
+		if ( typeof globalThis.__hyperthreeDecodeDraco === 'function' ) {
 
 			try {
 
@@ -2718,7 +2817,7 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         let bundled_from = r#"decodeDracoFile(buffer2, callback, attributeIDs, attributeTypes, vertexColorSpace = LinearSRGBColorSpace, onError = () => {
     }) {"#;
         let bundled_hook = r#"
-      if (globalThis.__hyperthreeDecodeDraco) {
+      if (typeof globalThis.__hyperthreeDecodeDraco === 'function') {
         try {
           globalThis.__hyperthreeDracoNativeCalls = (globalThis.__hyperthreeDracoNativeCalls || 0) + 1;
           const nativeResult = globalThis.__hyperthreeDecodeDraco(new Uint8Array(buffer2));
@@ -2747,7 +2846,7 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
             boa_changed = true;
         }
         let minified_from = "decodeDracoFile(e,t,s,i,n=ot,r=()=>{}){";
-        let minified_hook = r#"if(globalThis.__hyperthreeDecodeDraco){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const o=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e)),a=i||this.defaultAttributeTypes,c=[];for(const e of o.attributes){const A=a[e.name]||'Float32Array',p=globalThis[A]||Float32Array,f=new Float32Array(e.data),g=p===Float32Array?f:new p(f);c.push({name:e.name,array:g,itemSize:e.itemSize,vertexColorSpace:n})}const h=this._createGeometry({index:{array:new Uint32Array(o.index)},attributes:c});return Promise.resolve(h).then(t).catch(r)}catch(e){return Promise.reject(e).catch(r)}}"#;
+        let minified_hook = r#"if(typeof globalThis.__hyperthreeDecodeDraco==='function'){try{globalThis.__hyperthreeDracoNativeCalls=(globalThis.__hyperthreeDracoNativeCalls||0)+1;const o=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e)),a=i||this.defaultAttributeTypes,c=[];for(const e of o.attributes){const A=a[e.name]||'Float32Array',p=globalThis[A]||Float32Array,f=new Float32Array(e.data),g=p===Float32Array?f:new p(f);c.push({name:e.name,array:g,itemSize:e.itemSize,vertexColorSpace:n})}const h=this._createGeometry({index:{array:new Uint32Array(o.index)},attributes:c});return Promise.resolve(h).then(t).catch(r)}catch(e){return Promise.reject(e).catch(r)}}"#;
         if normalized.contains(minified_from)
             && !normalized.contains("new Uint8Array(e),a=i||this.defaultAttributeTypes")
         {
@@ -2764,6 +2863,35 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
                 &format!("{minified_from_alt}{minified_hook}"),
             );
             boa_changed = true;
+        }
+        boa_changed |= inject_minified_draco_preload_guard(&mut normalized);
+        boa_changed |= inject_minified_draco_decode_hook(&mut normalized);
+        let minified_geometry_marker = "decodeGeometry(e,t){";
+        let minified_geometry_hook = "decodeGeometry(e,t){if(globalThis.__hyperthreeNativeDracoAvailable===true){try{globalThis.__hyperthreeDracoNativeGeometryCalls=(globalThis.__hyperthreeDracoNativeGeometryCalls||0)+1;const __htNativeResult=globalThis.__hyperthreeDecodeDraco(new Uint8Array(e));const __htRequestedTypes=t&&t.attributeTypes||this.defaultAttributeTypes;const __htAttributes=[];for(const __htNativeAttribute of __htNativeResult.attributes){const __htTypeName=__htRequestedTypes[__htNativeAttribute.name]||'Float32Array';const __htArrayType=globalThis[__htTypeName]||Float32Array;const __htValues=new Float32Array(__htNativeAttribute.data);const __htTypedValues=__htArrayType===Float32Array?__htValues:new __htArrayType(__htValues);__htAttributes.push({name:__htNativeAttribute.name,array:__htTypedValues,itemSize:__htNativeAttribute.itemSize,vertexColorSpace:t&&t.vertexColorSpace});}return Promise.resolve(this._createGeometry({index:{array:new Uint32Array(__htNativeResult.index)},attributes:__htAttributes}));}catch(__htError){return Promise.reject(__htError);}}";
+        if normalized.contains(minified_geometry_marker)
+            && !normalized.contains("__hyperthreeDracoNativeGeometryCalls")
+        {
+            normalized = normalized.replace(minified_geometry_marker, minified_geometry_hook);
+            boa_changed = true;
+        }
+        for (from, to) in [
+            (
+                "typeof globalThis.__hyperthreeDecodeDraco === 'function'",
+                "globalThis.__hyperthreeNativeDracoAvailable === true",
+            ),
+            (
+                "typeof globalThis.__hyperthreeDecodeDraco !== 'function'",
+                "globalThis.__hyperthreeNativeDracoAvailable !== true",
+            ),
+            (
+                "typeof globalThis.__hyperthreeDecodeDraco==='function'",
+                "globalThis.__hyperthreeNativeDracoAvailable===true",
+            ),
+        ] {
+            if normalized.contains(from) {
+                normalized = normalized.replace(from, to);
+                boa_changed = true;
+            }
         }
     }
     if is_gltf_loader_bundle
@@ -3675,10 +3803,31 @@ mod tests {
         let normalized = normalize_three_compatibility_source(source);
         assert!(normalized.contains("__hyperthreeDecodeDraco"));
         assert!(normalized.contains("__hyperthreeDracoNativeCalls"));
-        assert!(normalized.contains("if ( globalThis.__hyperthreeDecodeDraco ) return this;"));
+        assert!(normalized
+            .contains("if ( globalThis.__hyperthreeNativeDracoAvailable === true ) return this;"));
         let minified = "/* DRACOLoader */ preload(){return this._initDecoder(),this} decodeDracoFile(e,t,s,i,n=at,r=()=>{}){}";
         let normalized = normalize_three_compatibility_source(minified);
         assert!(normalized.contains("__hyperthreeDecodeDraco"));
+        let current_vite_minified = "/* draco_decoder.js */ class Loader{preload(){return this._initDecoder(),this}_initDecoder(){throw new Error('decoder')} decodeDracoFile(e,t,s,i,n=lt,r=()=>{}){const o={};return o}}";
+        let normalized = normalize_three_compatibility_source(current_vite_minified);
+        assert!(normalized
+            .contains("if(globalThis.__hyperthreeNativeDracoAvailable===true)return this;"));
+        assert!(normalized.contains("__hyperthreeDracoNativeCalls"));
+    }
+
+    #[test]
+    fn injects_native_draco_decoder_into_current_vite_fixture_when_present() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/threejs-gltf-loader-smoke/dist/game.js");
+        if !path.is_file() {
+            return;
+        }
+        let source = fs::read_to_string(path).unwrap();
+        let normalized = normalize_three_compatibility_source(&source);
+        assert!(normalized.contains("__hyperthreeDracoNativeCalls"));
+        assert!(normalized.contains("__hyperthreeDracoNativeGeometryCalls"));
+        assert!(normalized
+            .contains("if(globalThis.__hyperthreeNativeDracoAvailable===true)return this;"));
     }
 
     #[cfg(any())]

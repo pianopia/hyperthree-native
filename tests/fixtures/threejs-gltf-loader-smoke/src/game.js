@@ -96,6 +96,7 @@ globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
 globalThis.__gltfMappedBufferSmoke = false;
 globalThis.__gltfQuerySmoke = false;
+globalThis.__gltfTimestampSmoke = false;
 globalThis.__gltfRenderBundleSmoke = false;
 globalThis.__gltfClearBufferSmoke = false;
 globalThis.__gltfBufferTextureSmoke = false;
@@ -347,6 +348,34 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const occlusionResult = new BigUint64Array(occlusionReadback.getMappedRange());
   globalThis.__gltfQuerySmoke = occlusionResult[0] > 0n;
   occlusionReadback.unmap();
+  if (!device.features.has("timestamp-query")) {
+    globalThis.__gltfTimestampSmoke = true;
+  } else {
+    const timestampQuerySet = device.createQuerySet({ type: "timestamp", count: 2 });
+    const timestampResolve = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const timestampReadback = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const timestampEncoder = device.createCommandEncoder();
+    const timestampPass = timestampEncoder.beginRenderPass({ colorAttachments: [{
+      view: indirectTarget.createView(),
+      loadOp: "load",
+      storeOp: "store",
+    }], timestampWrites: {
+      querySet: timestampQuerySet,
+      beginningOfPassWriteIndex: 0,
+      endOfPassWriteIndex: 1,
+    } });
+    timestampPass.end();
+    timestampEncoder.resolveQuerySet(timestampQuerySet, 0, 2, timestampResolve, 0);
+    timestampEncoder.copyBufferToBuffer(timestampResolve, 0, timestampReadback, 0, 16);
+    device.queue.submit([timestampEncoder.finish()]);
+    await timestampReadback.mapAsync(GPUMapMode.READ);
+    const timestampResult = new BigUint64Array(timestampReadback.getMappedRange());
+    globalThis.__gltfTimestampSmoke = timestampResult[0] > 0n && timestampResult[1] >= timestampResult[0];
+    timestampReadback.unmap();
+    timestampQuerySet.destroy();
+    timestampResolve.destroy();
+    timestampReadback.destroy();
+  }
   occlusionQuerySet.destroy();
   occlusionResolve.destroy();
   occlusionReadback.destroy();
@@ -545,6 +574,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
       !globalThis.__gltfComputeSmoke ||
+      !globalThis.__gltfTimestampSmoke ||
       !globalThis.__gltfResourceDescriptorSmoke ||
       !globalThis.__gltfExternalTextureSmoke ||
       !globalThis.__gltfVideoFrameSmoke ||

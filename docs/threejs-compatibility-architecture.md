@@ -91,6 +91,9 @@ shadow、equirectangular environment、MRT、indirect drawとそのGPU readback�
 スモーク済みである。`GPURenderBundleEncoder`の記録・finish・`executeBundles()`、
 `GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/
 `endOcclusionQuery()`、`resolveQuerySet()`とMAP_READ readbackもnative wgpuへ接続した。
+`timestamp-query`と`timestampWrites`がnative adapterで提供される場合は、inside-passの開始／終了
+timestampをresolveしてMAP_READするfixtureも実行し、未提供backendでは機能未提供として安全に
+スキップする。
 `GPUCommandEncoder.clearBuffer()`、`copyBufferToTexture()`、`GPUQueue.writeBuffer()`の
 dataOffset/size、`writeTexture()`のdataLayout.offsetもnative wgpuコマンドへ接続した。
 Adapter/Deviceの実GPU limitsを`GPUSupportedLimits`互換のcamelCaseで公開し、
@@ -131,9 +134,9 @@ Promiseへ配送し、error scopeはnative `push_error_scope`/`pop_error_scope`�
 JS sessionを再生成してentry pointを再実行するところまで検証済みである。ゲームJSのヒープ状態
 は再初期化され、アプリ固有の永続状態は次のセーブ／復元層で扱う。
 constructor内lexical bindingを`var`へ限定正規化する
-Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次は透明合成を含む
-present/device-loss lifecycle、timestamp queryの実GPU検証、DRACOの追加属性、未実装の標準WebGPU APIを
-段階的に埋める。
+Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。残りは透明合成を含む
+present/device-loss lifecycle、DRACOの追加属性・point cloud、動画codecと連続frame scheduling、
+未実装の標準WebGPU APIを段階的に埋める。
 
 ネイティブ`AssetStore`のglTF経路には`EXT_meshopt_compression`の属性、三角形インデックス、
 インデックスシーケンスの3モード展開も接続し、NONE/OCTAHEDRAL/QUATERNION/
@@ -157,6 +160,9 @@ RGBA32/BC7へ変換するbinding testと、標準GLTFLoader経由のend-to-end f
 `KHR_draco_mesh_compression` glTFを、標準GLTFLoader/DRACOLoader経由でnative decodeする
 fixtureを検証済みである。UASTCのGPUターゲット別fixture、Dracoのpoint cloud/standalone API、
 および全属性・morph/animationの網羅は継続課題である。
+Vite等のminifierが引数名やメソッド形式を変更しても、native capability markerを使った
+preload/init/decodeGeometryの境界注入へフォールバックするため、ブラウザWorkerや
+`draco_decoder.js`資産が存在しないnative hostでも標準GLTFLoader経路を維持できる。
 
 WebGPU側は、実GPUが提供するBC/ETC2/ASTC圧縮機能を`GPUAdapter.features`/`GPUDevice.features`
 へ公開し、Three.jsの圧縮テクスチャ経路が使う形式名をwgpuへ変換する。`queue.writeTexture()`

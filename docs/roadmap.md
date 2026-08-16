@@ -45,6 +45,7 @@
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
+- [x] WebGPU timestamp-query feature negotiation, inside-pass writes, resolve, and conditional native readback fixture
 - [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
 - [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
 - [x] WebGPU device/adapter limits exposure and queue onSubmittedWorkDone synchronization
@@ -68,6 +69,7 @@
 - [x] UASTC KTX2 end-to-end fixture for RGBA32 and BC7 target paths
 - [ ] UASTC target matrix across ASTC/BC3/BC1/ETC2 on Windows/Linux GPU backends
 - [x] DRACO native mesh decode through standard GLTFLoader/DRACOLoader with Khronos Box fixture
+- [x] DRACO native decoder hook at preload/init/decodeGeometry boundaries, resilient to Vite minification and Worker absence
 - [ ] DRACO attribute/point-cloud/standalone API coverage and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite
 - [ ] Signed installers and release update channels for all three platforms
