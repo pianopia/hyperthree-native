@@ -22,6 +22,7 @@
 - [x] Three.js matrixWorld transport for animated object transforms
 - [x] Three.js Points to native billboard particle effect path
 - [x] Native WebGPU navigator/device resource smoke path (buffer, texture, shader module)
+- [x] WebGPU mapped buffer upload, native canvas/DOM shim, and WGSL compatibility normalization
 - [x] Native WebGPU bind group/pipeline/render-pass/compute-pass command execution slice
 - [x] Initial GPUCanvasContext and native swapchain presentation path
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer

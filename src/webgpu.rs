@@ -327,11 +327,12 @@ impl NativeWebGpuContext {
 
     fn create_shader_module(&self, source: &str) -> Result<u64, String> {
         let id = self.allocate_id()?;
+        let source = sanitize_wgsl(source);
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("hyperthree-js-shader-module"),
-                source: wgpu::ShaderSource::Wgsl(source.to_string().into()),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
             });
         self.resources
             .lock()
@@ -391,7 +392,8 @@ impl NativeWebGpuContext {
             mipmap_filter: filter_mode(json_string(descriptor, "mipmapFilter")),
             lod_min_clamp: json_f32(descriptor, "lodMinClamp", 0.0),
             lod_max_clamp: json_f32(descriptor, "lodMaxClamp", 32.0),
-            compare: Some(compare_function(json_string(descriptor, "compare"))),
+            compare: json_string(descriptor, "compare")
+                .map(|compare| compare_function(Some(compare))),
             anisotropy_clamp: json_u16(descriptor, "maxAnisotropy", 1),
             border_color: None,
         });
@@ -2151,6 +2153,14 @@ fn native_error(error: String) -> boa_engine::JsError {
     JsNativeError::error().with_message(error).into()
 }
 
+fn sanitize_wgsl(source: &str) -> String {
+    source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("diagnostic("))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn buffer_usage(bits: u64) -> wgpu::BufferUsages {
     let mut usage = wgpu::BufferUsages::empty();
     if bits & 1 != 0 {
@@ -2176,6 +2186,12 @@ fn buffer_usage(bits: u64) -> wgpu::BufferUsages {
     }
     if bits & 128 != 0 {
         usage |= wgpu::BufferUsages::STORAGE;
+    }
+    if bits & 256 != 0 {
+        usage |= wgpu::BufferUsages::INDIRECT;
+    }
+    if bits & 512 != 0 {
+        usage |= wgpu::BufferUsages::QUERY_RESOLVE;
     }
     usage
 }
@@ -2219,13 +2235,40 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   const makeHandle = (id, methods = {}) => Object.assign({ __hyperthreeHandle: id }, methods);
   const handleId = value => value?.__hyperthreeHandle ?? value;
   const descriptorJson = value => JSON.stringify(value ?? {});
-  const bufferUsage = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128 };
+  const bufferUsage = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128, INDIRECT: 256, QUERY_RESOLVE: 512 };
   const textureUsage = { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 };
+  globalThis.GPUShaderStage = globalThis.GPUShaderStage || { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
+  globalThis.GPUMapMode = globalThis.GPUMapMode || { READ: 1, WRITE: 2 };
+  globalThis.GPUFeatureName = globalThis.GPUFeatureName || { 'timestamp-query': 'timestamp-query' };
+  globalThis.HTMLCanvasElement = globalThis.HTMLCanvasElement || function HTMLCanvasElement() {};
+  globalThis.HTMLVideoElement = globalThis.HTMLVideoElement || function HTMLVideoElement() {};
+  globalThis.HTMLImageElement = globalThis.HTMLImageElement || function HTMLImageElement() {};
+  globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
+  globalThis.VideoFrame = globalThis.VideoFrame || function VideoFrame() {};
+  globalThis.ImageData = globalThis.ImageData || function ImageData() {};
+  globalThis.OffscreenCanvas = globalThis.OffscreenCanvas || function OffscreenCanvas() {};
   globalThis.GPUBufferUsage = globalThis.GPUBufferUsage || bufferUsage;
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || textureUsage;
   const makeBuffer = (descriptor = {}) => {
-    const id = __hyperthreeWebGpuCreateBuffer(descriptor.size ?? 1, descriptor.usage ?? GPUBufferUsage.COPY_DST);
-    return makeHandle(id, { destroy: () => __hyperthreeWebGpuDestroyBuffer(id) });
+    const size = descriptor.size ?? 1;
+    const id = __hyperthreeWebGpuCreateBuffer(size, descriptor.usage ?? GPUBufferUsage.COPY_DST);
+    const mapped = descriptor.mappedAtCreation === true;
+    const shadow = mapped ? new ArrayBuffer(size) : null;
+    return makeHandle(id, {
+      mapState: mapped ? 'mapped' : 'unmapped',
+      getMappedRange(offset = 0, rangeSize = size - offset) {
+        if (shadow === null) throw new TypeError('GPUBuffer is not mapped');
+        return shadow.slice(offset, offset + rangeSize);
+      },
+      mapAsync: async () => {},
+      unmap() {
+        if (shadow !== null) {
+          __hyperthreeWebGpuWriteBuffer(id, 0, new Uint8Array(shadow));
+          this.mapState = 'unmapped';
+        }
+      },
+      destroy: () => __hyperthreeWebGpuDestroyBuffer(id),
+    });
   };
   const makeTexture = (descriptor = {}) => {
     const size = descriptor.size || {};
@@ -2262,6 +2305,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     setAttribute() {},
     getAttribute() { return null; },
   };
+  Object.setPrototypeOf(nativeCanvas, HTMLCanvasElement.prototype);
   globalThis.__hyperthreeNativeCanvas = nativeCanvas;
   globalThis.document = globalThis.document || {
     createElement(name) { return name === 'canvas' ? nativeCanvas : { style: {}, addEventListener() {}, removeEventListener() {} }; },
