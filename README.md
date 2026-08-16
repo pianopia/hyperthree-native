@@ -93,6 +93,7 @@ SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描�
 - `src/bridge.rs`: JavaScriptからネイティブ描画状態へ渡す共有ブリッジ
 - `src/platform.rs`: OS・GPUバックエンド診断
 - `src/project.rs`: `hyperthree.toml`、雛形生成、npmビルド導線
+- `src/storage.rs`: プロジェクトsandboxのlocalStorage永続化
 - `js/`: Three.js 互換層へ接続するゲームエントリーポイント
 - `docs/architecture.md`: 仕様書の各項目と実装状況
 - `docs/platform-support.md`: macOS / Windows / Linux対応計画
