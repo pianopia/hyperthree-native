@@ -52,6 +52,7 @@ struct Resources {
     bind_groups: HashMap<u64, wgpu::BindGroup>,
     render_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     compute_pipelines: HashMap<u64, wgpu::ComputePipeline>,
+    query_sets: HashMap<u64, wgpu::QuerySet>,
     command_encoders: HashMap<u64, CommandEncoderState>,
     open_passes: HashMap<u64, OpenPass>,
     command_buffers: HashMap<u64, QueuedCommandBuffer>,
@@ -122,6 +123,13 @@ enum RecordedCommand {
         rows_per_image: u32,
         size: [u32; 3],
     },
+    ResolveQuerySet {
+        query_set: u64,
+        first_query: u32,
+        query_count: u32,
+        destination: u64,
+        destination_offset: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -140,12 +148,22 @@ enum OpenPass {
 struct RenderPassState {
     colors: Vec<ColorAttachmentState>,
     depth_stencil: Option<DepthStencilAttachmentState>,
+    occlusion_query_set: Option<u64>,
+    timestamp_writes: Option<TimestampWrites>,
     commands: Vec<RenderCommand>,
 }
 
 #[derive(Debug)]
 struct ComputePassState {
+    timestamp_writes: Option<TimestampWrites>,
     commands: Vec<ComputeCommand>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimestampWrites {
+    query_set: u64,
+    beginning_of_pass_write_index: Option<u32>,
+    end_of_pass_write_index: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -221,6 +239,8 @@ enum RenderCommand {
         buffer: u64,
         offset: u64,
     },
+    BeginOcclusionQuery(u32),
+    EndOcclusionQuery,
 }
 
 #[derive(Debug)]
@@ -314,6 +334,13 @@ impl NativeWebGpuContext {
             .contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC)
         {
             features.push("texture-compression-astc");
+        }
+        if self.features.contains(wgpu::Features::TIMESTAMP_QUERY)
+            && self
+                .features
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
+        {
+            features.push("timestamp-query");
         }
         features
     }
@@ -994,6 +1021,55 @@ impl NativeWebGpuContext {
         Ok(id)
     }
 
+    fn create_query_set(&self, descriptor: &Value) -> Result<u64, String> {
+        let query_type = match json_string(descriptor, "type").as_deref() {
+            Some("occlusion") => wgpu::QueryType::Occlusion,
+            Some("timestamp") => {
+                if !self.features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+                    return Err(
+                        "timestamp query requested but the native device does not expose timestamp-query"
+                            .to_string(),
+                    );
+                }
+                wgpu::QueryType::Timestamp
+            }
+            Some("pipeline-statistics") => {
+                return Err(
+                    "pipeline-statistics query sets are not supported by the native bridge"
+                        .to_string(),
+                )
+            }
+            Some(other) => return Err(format!("unsupported GPUQuerySet type {other}")),
+            None => return Err("GPUQuerySet.type is required".to_string()),
+        };
+        let count = json_u32(descriptor, "count", 0);
+        if count == 0 {
+            return Err("GPUQuerySet.count must be greater than zero".to_string());
+        }
+        let query_set = self.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("hyperthree-js-query-set"),
+            ty: query_type,
+            count,
+        });
+        let id = self.allocate_id()?;
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .query_sets
+            .insert(id, query_set);
+        Ok(id)
+    }
+
+    fn destroy_query_set(&self, id: u64) -> Result<(), String> {
+        self.resources
+            .lock()
+            .map_err(|_| "WebGPU resource registry poisoned".to_string())?
+            .query_sets
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| format!("unknown GPUQuerySet handle {id}"))
+    }
+
     fn get_render_pipeline_bind_group_layout(
         &self,
         pipeline_id: u64,
@@ -1067,6 +1143,21 @@ impl NativeWebGpuContext {
             .filter(|value| !value.is_null())
             .map(depth_stencil_attachment_state)
             .transpose()?;
+        let occlusion_query_set = descriptor
+            .get("occlusionQuerySet")
+            .filter(|value| !value.is_null())
+            .and_then(Value::as_u64);
+        let timestamp_writes = timestamp_writes_descriptor(descriptor.get("timestampWrites"))?;
+        if timestamp_writes.is_some()
+            && !self
+                .features
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
+        {
+            return Err(
+                "timestampWrites requires the native timestamp-query-inside-passes feature"
+                    .to_string(),
+            );
+        }
         let pass_id = self.allocate_id()?;
         let mut resources = self
             .resources
@@ -1082,6 +1173,8 @@ impl NativeWebGpuContext {
                 state: RenderPassState {
                     colors,
                     depth_stencil,
+                    occlusion_query_set,
+                    timestamp_writes,
                     commands: Vec::new(),
                 },
             },
@@ -1089,7 +1182,18 @@ impl NativeWebGpuContext {
         Ok(pass_id)
     }
 
-    fn begin_compute_pass(&self, encoder_id: u64) -> Result<u64, String> {
+    fn begin_compute_pass(&self, encoder_id: u64, descriptor: &Value) -> Result<u64, String> {
+        let timestamp_writes = timestamp_writes_descriptor(descriptor.get("timestampWrites"))?;
+        if timestamp_writes.is_some()
+            && !self
+                .features
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
+        {
+            return Err(
+                "timestampWrites requires the native timestamp-query-inside-passes feature"
+                    .to_string(),
+            );
+        }
         let pass_id = self.allocate_id()?;
         let mut resources = self
             .resources
@@ -1103,6 +1207,7 @@ impl NativeWebGpuContext {
             OpenPass::Compute {
                 encoder: encoder_id,
                 state: ComputePassState {
+                    timestamp_writes,
                     commands: Vec::new(),
                 },
             },
@@ -1251,6 +1356,18 @@ impl NativeWebGpuContext {
                         value_u32_or(size, 1, 1)?,
                         value_u32_or(size, 2, 1)?,
                     ],
+                }
+            }
+            "resolveQuerySet" => {
+                let values = payload
+                    .as_array()
+                    .ok_or_else(|| "resolveQuerySet payload must be an array".to_string())?;
+                RecordedCommand::ResolveQuerySet {
+                    query_set: value_u64(values, 0)?,
+                    first_query: value_u32_or(values, 1, 0)?,
+                    query_count: value_u32(values, 2)?,
+                    destination: value_u64(values, 3)?,
+                    destination_offset: value_u64_or(values, 4, 0)?,
                 }
             }
             _ => return Err(format!("unsupported WebGPU encoder command {operation}")),
@@ -1423,6 +1540,13 @@ impl NativeWebGpuContext {
                     offset: value_u64_or(values, 1, 0)?,
                 },
             ),
+            "beginOcclusionQuery" => self.push_render_command(
+                pass_id,
+                RenderCommand::BeginOcclusionQuery(value_u32(values, 0)?),
+            ),
+            "endOcclusionQuery" => {
+                self.push_render_command(pass_id, RenderCommand::EndOcclusionQuery)
+            }
             "dispatchWorkgroups" => self.push_compute_command(
                 pass_id,
                 ComputeCommand::DispatchWorkgroups {
@@ -1573,6 +1697,27 @@ impl NativeWebGpuContext {
                             height: size[1],
                             depth_or_array_layers: size[2],
                         },
+                    );
+                }
+                RecordedCommand::ResolveQuerySet {
+                    query_set,
+                    first_query,
+                    query_count,
+                    destination,
+                    destination_offset,
+                } => {
+                    let query_set = resources
+                        .query_sets
+                        .get(&query_set)
+                        .ok_or_else(|| format!("unknown GPUQuerySet handle {query_set}"))?;
+                    let destination = resources.buffers.get(&destination).ok_or_else(|| {
+                        format!("unknown query destination GPUBuffer handle {destination}")
+                    })?;
+                    encoder.resolve_query_set(
+                        query_set,
+                        first_query..first_query + query_count,
+                        destination,
+                        destination_offset,
                     );
                 }
             }
@@ -1999,6 +2144,28 @@ pub fn register_bindings(
         |gpu, descriptor| gpu.create_compute_pipeline(descriptor),
     )?;
 
+    let query_set_gpu = gpu.clone();
+    register_json_resource(
+        context,
+        "__hyperthreeWebGpuCreateQuerySet",
+        query_set_gpu,
+        |gpu, descriptor| gpu.create_query_set(descriptor),
+    )?;
+
+    let destroy_query_set_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuDestroyQuerySet",
+        1,
+        move |_this, args, context| {
+            let id = number_arg(args, 0, context)? as u64;
+            destroy_query_set_gpu
+                .destroy_query_set(id)
+                .map(|_| JsValue::undefined())
+                .map_err(native_error)
+        },
+    )?;
+
     let render_layout_gpu = gpu.clone();
     register(
         context,
@@ -2061,11 +2228,12 @@ pub fn register_bindings(
     register(
         context,
         "__hyperthreeWebGpuBeginComputePass",
-        1,
+        2,
         move |_this, args, context| {
             let encoder_id = number_arg(args, 0, context)? as u64;
+            let descriptor = json_arg(args, 1, context)?;
             begin_compute_gpu
-                .begin_compute_pass(encoder_id)
+                .begin_compute_pass(encoder_id, &descriptor)
                 .map(JsValue::from)
                 .map_err(native_error)
         },
@@ -2273,6 +2441,26 @@ fn texture_copy_descriptor(values: &[Value], index: usize) -> Result<(u64, u32, 
     ))
 }
 
+fn timestamp_writes_descriptor(value: Option<&Value>) -> Result<Option<TimestampWrites>, String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    Ok(Some(TimestampWrites {
+        query_set: value
+            .get("querySet")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "timestampWrites.querySet is required".to_string())?,
+        beginning_of_pass_write_index: value
+            .get("beginningOfPassWriteIndex")
+            .and_then(Value::as_u64)
+            .map(|value| value as u32),
+        end_of_pass_write_index: value
+            .get("endOfPassWriteIndex")
+            .and_then(Value::as_u64)
+            .map(|value| value as u32),
+    }))
+}
+
 fn collect_surface_texture_id(view_id: u64, resources: &Resources, ids: &mut Vec<u64>) {
     if let Some(texture_id) = resources.texture_view_sources.get(&view_id) {
         if resources.surface_textures.contains_key(texture_id) && !ids.contains(texture_id) {
@@ -2338,12 +2526,34 @@ fn encode_render_pass(
             )
         })
         .transpose()?;
+    let occlusion_query_set = state
+        .occlusion_query_set
+        .map(|id| {
+            resources
+                .query_sets
+                .get(&id)
+                .ok_or_else(|| format!("unknown occlusion GPUQuerySet handle {id}"))
+        })
+        .transpose()?;
+    let timestamp_writes = state
+        .timestamp_writes
+        .map(|writes| {
+            let query_set = resources.query_sets.get(&writes.query_set).ok_or_else(|| {
+                format!("unknown timestamp GPUQuerySet handle {}", writes.query_set)
+            })?;
+            Ok::<wgpu::RenderPassTimestampWrites<'_>, String>(wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: writes.beginning_of_pass_write_index,
+                end_of_pass_write_index: writes.end_of_pass_write_index,
+            })
+        })
+        .transpose()?;
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("hyperthree-js-render-pass"),
         color_attachments: &color_attachments,
         depth_stencil_attachment,
-        occlusion_query_set: None,
-        timestamp_writes: None,
+        occlusion_query_set,
+        timestamp_writes,
     });
     for command in state.commands {
         match command {
@@ -2448,6 +2658,8 @@ fn encode_render_pass(
                     .ok_or_else(|| format!("unknown GPUBuffer handle {buffer}"))?;
                 pass.draw_indexed_indirect(buffer, offset);
             }
+            RenderCommand::BeginOcclusionQuery(index) => pass.begin_occlusion_query(index),
+            RenderCommand::EndOcclusionQuery => pass.end_occlusion_query(),
         }
     }
     drop(pass);
@@ -2459,9 +2671,22 @@ fn encode_compute_pass(
     resources: &Resources,
     state: ComputePassState,
 ) -> Result<(), String> {
+    let timestamp_writes = state
+        .timestamp_writes
+        .map(|writes| {
+            let query_set = resources.query_sets.get(&writes.query_set).ok_or_else(|| {
+                format!("unknown timestamp GPUQuerySet handle {}", writes.query_set)
+            })?;
+            Ok::<wgpu::ComputePassTimestampWrites<'_>, String>(wgpu::ComputePassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: writes.beginning_of_pass_write_index,
+                end_of_pass_write_index: writes.end_of_pass_write_index,
+            })
+        })
+        .transpose()?;
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: Some("hyperthree-js-compute-pass"),
-        timestamp_writes: None,
+        timestamp_writes,
     });
     for command in state.commands {
         match command {
@@ -3415,13 +3640,26 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     const mapped = descriptor.mappedAtCreation === true;
     let shadow = mapped ? new ArrayBuffer(size) : null;
     let mappedForRead = false;
-    return makeHandle(id, {
+    let mappedOffset = mapped ? 0 : null;
+    let mappedSize = mapped ? size : 0;
+    let bufferHandle;
+    bufferHandle = makeHandle(id, {
       mapState: mapped ? 'mapped' : 'unmapped',
-      getMappedRange(offset = 0, rangeSize = size - offset) {
+      getMappedRange(offset = 0, rangeSize) {
         if (shadow === null) throw new TypeError('GPUBuffer is not mapped');
-        return shadow.slice(offset, offset + rangeSize);
+        if (rangeSize === undefined) rangeSize = mappedSize - (offset - (mappedOffset ?? 0));
+        if (mappedOffset === null || offset < mappedOffset || offset + rangeSize > mappedOffset + mappedSize) {
+          throw new RangeError('GPUBuffer mapped range is outside the active mapping');
+        }
+        const relativeOffset = offset - mappedOffset;
+        return relativeOffset === 0 && rangeSize === mappedSize
+          ? shadow
+          : shadow.slice(relativeOffset, relativeOffset + rangeSize);
       },
       mapAsync: async (mode = GPUMapMode.READ, offset = 0, rangeSize = size - offset) => {
+        if (shadow !== null) throw new TypeError('GPUBuffer is already mapped');
+        mappedOffset = offset;
+        mappedSize = rangeSize;
         if ((mode & GPUMapMode.READ) !== 0) {
           shadow = __hyperthreeWebGpuReadBuffer(id, offset, rangeSize);
           mappedForRead = true;
@@ -3429,18 +3667,21 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           shadow = new ArrayBuffer(rangeSize);
           mappedForRead = false;
         }
-        this.mapState = 'mapped';
+        bufferHandle.mapState = 'mapped';
       },
       unmap() {
         if (shadow !== null && !mappedForRead) {
-          __hyperthreeWebGpuWriteBuffer(id, 0, new Uint8Array(shadow));
+          __hyperthreeWebGpuWriteBuffer(id, mappedOffset ?? 0, new Uint8Array(shadow));
         }
         shadow = null;
         mappedForRead = false;
-        this.mapState = 'unmapped';
+        mappedOffset = null;
+        mappedSize = 0;
+        bufferHandle.mapState = 'unmapped';
       },
       destroy: () => __hyperthreeWebGpuDestroyBuffer(id),
     });
+    return bufferHandle;
   };
   const makeTexture = (descriptor = {}) => {
     const size = descriptor.size || {};
@@ -3565,6 +3806,12 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       depthStoreOp: descriptor.depthStencilAttachment.depthStoreOp ?? 'store',
       depthClearValue: descriptor.depthStencilAttachment.depthClearValue ?? 1,
     } : null,
+    occlusionQuerySet: descriptor.occlusionQuerySet ? handleId(descriptor.occlusionQuerySet) : null,
+    timestampWrites: descriptor.timestampWrites ? {
+      querySet: handleId(descriptor.timestampWrites.querySet),
+      beginningOfPassWriteIndex: descriptor.timestampWrites.beginningOfPassWriteIndex,
+      endOfPassWriteIndex: descriptor.timestampWrites.endOfPassWriteIndex,
+    } : null,
   });
   const makeDevice = () => {
     let resolveLost;
@@ -3676,6 +3923,13 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         });
       },
       createComputePipelineAsync: async (descriptor = {}) => device.createComputePipeline(descriptor),
+      createQuerySet(descriptor = {}) {
+        const id = __hyperthreeWebGpuCreateQuerySet(descriptorJson({
+          type: descriptor.type,
+          count: descriptor.count,
+        }));
+        return makeHandle(id, { destroy: () => __hyperthreeWebGpuDestroyQuerySet(id) });
+      },
       createCommandEncoder() {
         const encoderId = __hyperthreeWebGpuCreateCommandEncoder();
         return makeHandle(encoderId, {
@@ -3683,8 +3937,15 @@ const WEBGPU_BOOTSTRAP: &str = r#"
             const passId = __hyperthreeWebGpuBeginRenderPass(encoderId, descriptorJson(normalizeRenderPassDescriptor(descriptor)));
             return makePass(passId);
           },
-          beginComputePass() {
-            return makePass(__hyperthreeWebGpuBeginComputePass(encoderId));
+          beginComputePass(descriptor = {}) {
+            const normalized = descriptor.timestampWrites ? {
+              timestampWrites: {
+                querySet: handleId(descriptor.timestampWrites.querySet),
+                beginningOfPassWriteIndex: descriptor.timestampWrites.beginningOfPassWriteIndex,
+                endOfPassWriteIndex: descriptor.timestampWrites.endOfPassWriteIndex,
+              },
+            } : {};
+            return makePass(__hyperthreeWebGpuBeginComputePass(encoderId, descriptorJson(normalized)));
           },
           copyBufferToBuffer(source, sourceOffset, destination, destinationOffset, size) {
             __hyperthreeWebGpuEncoderCommand(encoderId, 'copyBufferToBuffer', JSON.stringify([
@@ -3720,6 +3981,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
               normalizedSize,
             ]));
           },
+          resolveQuerySet(querySet, firstQuery, queryCount, destination, destinationOffset) {
+            __hyperthreeWebGpuEncoderCommand(encoderId, 'resolveQuerySet', JSON.stringify([
+              handleId(querySet), firstQuery, queryCount, handleId(destination), destinationOffset ?? 0,
+            ]));
+          },
           finish() { return makeHandle(__hyperthreeWebGpuFinishCommandEncoder(encoderId)); },
         });
       },
@@ -3750,6 +4016,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       drawIndexed(indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) { command('drawIndexed', [indexCount, instanceCount, firstIndex, baseVertex, firstInstance]); },
       drawIndirect(buffer, offset = 0) { command('drawIndirect', [handleId(buffer), offset]); },
       drawIndexedIndirect(buffer, offset = 0) { command('drawIndexedIndirect', [handleId(buffer), offset]); },
+      beginOcclusionQuery(queryIndex) { command('beginOcclusionQuery', [queryIndex]); },
+      endOcclusionQuery() { command('endOcclusionQuery', []); },
       dispatchWorkgroups(x, y = 1, z = 1) { command('dispatchWorkgroups', [x, y, z]); },
       dispatchWorkgroupsIndirect(buffer, offset = 0) { command('dispatchWorkgroupsIndirect', [handleId(buffer), offset]); },
       end() { __hyperthreeWebGpuEndPass(passId); },

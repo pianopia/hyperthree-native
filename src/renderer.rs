@@ -196,11 +196,13 @@ impl Renderer {
         let compression_features = wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+        let query_features =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("hyperthree-device"),
-                    required_features: adapter.features() & compression_features,
+                    required_features: adapter.features() & (compression_features | query_features),
                     required_limits: wgpu::Limits::default(),
                 },
                 None,

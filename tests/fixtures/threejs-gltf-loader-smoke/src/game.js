@@ -94,6 +94,8 @@ globalThis.__gltfEnvironmentSmoke = false;
 globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
+globalThis.__gltfMappedBufferSmoke = false;
+globalThis.__gltfQuerySmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfResizeEvent = false;
@@ -115,6 +117,19 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const readbackBytes = new Uint8Array(readbackBuffer.getMappedRange());
   globalThis.__gltfReadbackSmoke = readbackBytes[0] === 7 && readbackBytes[1] === 11 && readbackBytes[2] === 13 && readbackBytes[3] === 17;
   readbackBuffer.unmap();
+  const mappedUpload = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, mappedAtCreation: true });
+  new Uint8Array(mappedUpload.getMappedRange()).set([19, 23, 29, 31]);
+  mappedUpload.unmap();
+  const mappedReadback = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const mappedEncoder = device.createCommandEncoder();
+  mappedEncoder.copyBufferToBuffer(mappedUpload, 0, mappedReadback, 0, 4);
+  device.queue.submit([mappedEncoder.finish()]);
+  await mappedReadback.mapAsync(GPUMapMode.READ);
+  const mappedBytes = new Uint8Array(mappedReadback.getMappedRange());
+  globalThis.__gltfMappedBufferSmoke = mappedBytes[0] === 19 && mappedBytes[1] === 23 && mappedBytes[2] === 29 && mappedBytes[3] === 31;
+  mappedReadback.unmap();
+  mappedUpload.destroy();
+  mappedReadback.destroy();
   sourceBuffer.destroy();
   readbackBuffer.destroy();
   const indirectTarget = device.createTexture({
@@ -123,6 +138,9 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
   const indirectReadback = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const occlusionQuerySet = device.createQuerySet({ type: "occlusion", count: 1 });
+  const occlusionResolve = device.createBuffer({ size: 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+  const occlusionReadback = device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const indirectArgs = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT });
   device.queue.writeBuffer(indirectArgs, 0, new Uint32Array([3, 1, 0, 0]));
   const indirectShader = device.createShaderModule({ code: `
@@ -144,20 +162,31 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     loadOp: "clear",
     storeOp: "store",
     clearValue: { r: 0, g: 0, b: 0, a: 1 },
-  }] });
+  }], occlusionQuerySet });
   indirectPass.setPipeline(indirectPipeline);
+  indirectPass.beginOcclusionQuery(0);
   indirectPass.drawIndirect(indirectArgs, 0);
+  indirectPass.endOcclusionQuery();
   indirectPass.end();
   indirectEncoder.copyTextureToBuffer(
     { texture: indirectTarget },
     { buffer: indirectReadback, bytesPerRow: 256, rowsPerImage: 4 },
     { width: 4, height: 4, depthOrArrayLayers: 1 },
   );
+  indirectEncoder.resolveQuerySet(occlusionQuerySet, 0, 1, occlusionResolve, 0);
+  indirectEncoder.copyBufferToBuffer(occlusionResolve, 0, occlusionReadback, 0, 8);
   device.queue.submit([indirectEncoder.finish()]);
   await indirectReadback.mapAsync(GPUMapMode.READ);
   const indirectBytes = new Uint8Array(indirectReadback.getMappedRange());
   globalThis.__gltfIndirectSmoke = indirectBytes[0] === 255 && indirectBytes[1] === 0 && indirectBytes[2] === 0 && indirectBytes[3] === 255;
   indirectReadback.unmap();
+  await occlusionReadback.mapAsync(GPUMapMode.READ);
+  const occlusionResult = new BigUint64Array(occlusionReadback.getMappedRange());
+  globalThis.__gltfQuerySmoke = occlusionResult[0] > 0n;
+  occlusionReadback.unmap();
+  occlusionQuerySet.destroy();
+  occlusionResolve.destroy();
+  occlusionReadback.destroy();
   indirectArgs.destroy();
   indirectReadback.destroy();
   indirectTarget.destroy();
@@ -315,7 +344,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
-      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
+      !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");
   }
