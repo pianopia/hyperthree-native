@@ -74,6 +74,23 @@ const physicalMesh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 10), phys
 physicalMesh.position.set(0, 0.25, 0);
 physicalMesh.castShadow = true;
 physicalMesh.receiveShadow = true;
+const morphGeometry = new THREE.SphereGeometry(0.3, 8, 6);
+const morphDelta = new Float32Array(morphGeometry.attributes.position.count * 3);
+for (let index = 0; index < morphGeometry.attributes.position.count; index += 1) morphDelta[index * 3 + 1] = 0.08;
+morphGeometry.morphAttributes.position = [new THREE.Float32BufferAttribute(morphDelta, 3)];
+const morphMesh = new THREE.Mesh(
+  morphGeometry,
+  new THREE.MeshStandardMaterial({ color: 0xffcc55, roughness: 0.45, metalness: 0.15 }),
+);
+morphMesh.position.set(1.65, 0.15, 0);
+morphMesh.updateMorphTargets();
+const morphMixer = new THREE.AnimationMixer(morphMesh);
+const morphClip = new THREE.AnimationClip(
+  'morph-pulse',
+  1,
+  [new THREE.NumberKeyframeTrack('.morphTargetInfluences[0]', [0, 0.5, 1], [0, 1, 0])],
+);
+morphMixer.clipAction(morphClip).play();
 const batched = new THREE.BatchedMesh(
   2,
   128,
@@ -84,7 +101,7 @@ const batchedGeometryId = batched.addGeometry(new THREE.BoxGeometry(0.3, 0.3, 0.
 const batchedInstanceId = batched.addInstance(batchedGeometryId);
 instanceMatrix.makeTranslation(0, -1.2, 0);
 batched.setMatrixAt(batchedInstanceId, instanceMatrix);
-featureGroup.add(instanced, line, sprite, physicalMesh, batched);
+featureGroup.add(instanced, line, sprite, physicalMesh, morphMesh, batched);
 featureGroup.traverse((object) => {
   if (object.isMesh || object.isBatchedMesh || object.isInstancedMesh) {
     object.castShadow = true;
@@ -113,6 +130,7 @@ globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
 globalThis.__gltfEnvironmentSmoke = false;
 globalThis.__gltfPhysicalPbrSmoke = false;
+globalThis.__gltfMorphSmoke = false;
 globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
@@ -536,6 +554,9 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const mixer = new THREE.AnimationMixer(gltf.scene);
   mixer.clipAction(gltf.animations[0]).play();
   mixer.update(0.25);
+  morphMixer.update(0.25);
+  globalThis.__gltfMorphSmoke = morphMesh.morphTargetInfluences?.[0] > 0 &&
+    morphMesh.geometry.morphAttributes.position[0].count === morphMesh.geometry.attributes.position.count;
   globalThis.__gltfSmokeLoaded = gltf.scene.children.length === 1 && gltf.animations.length === 1;
   const textured = externalGltf.scene.getObjectByProperty("isMesh", true);
   globalThis.__gltfExternalTexture = Boolean(
@@ -623,6 +644,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfPhysicalPbrSmoke ||
+      !globalThis.__gltfMorphSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
