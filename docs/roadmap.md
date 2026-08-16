@@ -17,6 +17,7 @@
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry
 - [x] Three.js position/index BufferGeometry registration and native GPU draw path
+- [x] BufferGeometry UV attributes and glTF base-color RGBA8 texture upload/draw path
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
 - [ ] glTF/KTX2 zero-copy texture decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite

@@ -62,7 +62,8 @@ HyperThreeNative.drawAsset("public/models/player.glb", 0, 0, {
 ```
 
 `drawAsset()`はglTF/GLBの指定プリミティブをネイティブ側でデコードし、
-POSITION/indexバッファをGPUへ登録します。Three.jsの任意の位置属性を持つ
+POSITION/index/UVバッファと対応するglTFベースカラーテクスチャ（RGBA8）を
+GPUへ登録します。Three.jsの任意の位置属性を持つ
 `BufferGeometry`は、`syncThreeScene(scene, camera)`がgeometry ID単位で登録・
 キャッシュして描画します。
 
@@ -92,9 +93,9 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 `HyperThreeNative.setClearColor()`、`setCamera()`、`beginFrame()`、`pushCube()`で
 描画状態を更新し、`HyperThreeGame.update(deltaSeconds)`で毎フレーム処理できる
 開発導線までを提供します。`syncThreeScene(scene, camera)`は
-`BoxGeometry`、`PlaneGeometry`、`SphereGeometry`と任意の位置/index
+`BoxGeometry`、`PlaneGeometry`、`SphereGeometry`と任意の位置/index/UV
 `BufferGeometry`をネイティブ描画へ同期します。任意のブラウザ向けThree.js
-ゲームをそのまま動かすには、テクスチャ・マテリアル、DOM/WebGPU API
+ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API
 バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
 完全な直接VRAM転送を引き続き実装する必要があります。
 

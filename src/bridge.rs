@@ -22,6 +22,7 @@ pub struct CubeSnapshot {
 #[derive(Debug, Clone)]
 pub struct CustomMeshSnapshot {
     pub geometry_id: u64,
+    pub texture_id: Option<u64>,
     pub position: [f64; 3],
     pub scale: [f64; 3],
     pub rotation_y: f64,
@@ -32,6 +33,14 @@ pub struct CustomMeshSnapshot {
 pub struct GeometryData {
     pub positions: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextureData {
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: Vec<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +60,7 @@ impl GeometryRegistry {
         geometry_id: u64,
         positions: Vec<[f32; 3]>,
         indices: Vec<u32>,
+        uvs: Vec<[f32; 2]>,
     ) -> Result<(), String> {
         if positions.len() < 3 {
             return Err("BufferGeometry must contain at least three vertices".to_string());
@@ -64,7 +74,14 @@ impl GeometryRegistry {
         {
             return Err("BufferGeometry index is outside the position attribute".to_string());
         }
-        let geometry = GeometryData { positions, indices };
+        if !uvs.is_empty() && uvs.len() != positions.len() {
+            return Err("BufferGeometry UV count must match the position count".to_string());
+        }
+        let geometry = GeometryData {
+            positions,
+            indices,
+            uvs,
+        };
         if self
             .geometries
             .get(&geometry_id)
@@ -78,6 +95,52 @@ impl GeometryRegistry {
 
     pub fn get(&self, geometry_id: u64) -> Option<Arc<GeometryData>> {
         self.geometries.get(&geometry_id).cloned()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TextureRegistry {
+    textures: HashMap<u64, Arc<TextureData>>,
+}
+
+pub type SharedTextureRegistry = Arc<Mutex<TextureRegistry>>;
+
+impl TextureRegistry {
+    pub fn shared() -> SharedTextureRegistry {
+        Arc::new(Mutex::new(Self::default()))
+    }
+
+    pub fn register(
+        &mut self,
+        texture_id: u64,
+        width: u32,
+        height: u32,
+        rgba8: Vec<u8>,
+    ) -> Result<(), String> {
+        if width == 0 || height == 0 {
+            return Err("texture dimensions must be positive".to_string());
+        }
+        if rgba8.len() != width as usize * height as usize * 4 {
+            return Err("texture data must be RGBA8".to_string());
+        }
+        let texture = TextureData {
+            width,
+            height,
+            rgba8,
+        };
+        if self
+            .textures
+            .get(&texture_id)
+            .is_some_and(|existing| existing.as_ref() == &texture)
+        {
+            return Ok(());
+        }
+        self.textures.insert(texture_id, Arc::new(texture));
+        Ok(())
+    }
+
+    pub fn get(&self, texture_id: u64) -> Option<Arc<TextureData>> {
+        self.textures.get(&texture_id).cloned()
     }
 }
 
@@ -109,6 +172,7 @@ pub struct NativeRenderSnapshot {
     pub custom_meshes: Vec<CustomMeshSnapshot>,
     pub camera: CameraSnapshot,
     pub geometry_registry: SharedGeometryRegistry,
+    pub texture_registry: SharedTextureRegistry,
 }
 
 #[derive(Debug)]
@@ -118,6 +182,7 @@ pub struct NativeRenderState {
     custom_meshes: Vec<CustomMeshSnapshot>,
     camera: CameraSnapshot,
     geometry_registry: SharedGeometryRegistry,
+    texture_registry: SharedTextureRegistry,
 }
 
 pub type SharedRenderState = Arc<Mutex<NativeRenderState>>;
@@ -196,6 +261,7 @@ impl Default for NativeRenderState {
                 projection: CameraProjection::Perspective,
             },
             geometry_registry: GeometryRegistry::shared(),
+            texture_registry: TextureRegistry::shared(),
         }
     }
 }
@@ -212,6 +278,7 @@ impl NativeRenderState {
             custom_meshes: self.custom_meshes.clone(),
             camera: self.camera,
             geometry_registry: self.geometry_registry.clone(),
+            texture_registry: self.texture_registry.clone(),
         }
     }
 
@@ -298,16 +365,31 @@ impl NativeRenderState {
         geometry_id: u64,
         positions: Vec<[f32; 3]>,
         indices: Vec<u32>,
+        uvs: Vec<[f32; 2]>,
     ) -> Result<(), String> {
         self.geometry_registry
             .lock()
             .map_err(|_| "geometry registry poisoned".to_string())?
-            .register(geometry_id, positions, indices)
+            .register(geometry_id, positions, indices, uvs)
     }
 
-    pub fn push_custom_mesh(
+    pub fn register_texture(
+        &mut self,
+        texture_id: u64,
+        width: u32,
+        height: u32,
+        rgba8: Vec<u8>,
+    ) -> Result<(), String> {
+        self.texture_registry
+            .lock()
+            .map_err(|_| "texture registry poisoned".to_string())?
+            .register(texture_id, width, height, rgba8)
+    }
+
+    pub fn push_custom_mesh_with_texture(
         &mut self,
         geometry_id: u64,
+        texture_id: Option<u64>,
         position: [f64; 3],
         scale: [f64; 3],
         rotation_y: f64,
@@ -315,6 +397,7 @@ impl NativeRenderState {
     ) {
         self.custom_meshes.push(CustomMeshSnapshot {
             geometry_id,
+            texture_id,
             position,
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
@@ -403,5 +486,34 @@ mod tests {
         assert!(input.is_mouse_button_down(0));
         input.clear();
         assert!(!input.is_mouse_button_down(0));
+    }
+
+    #[test]
+    fn geometry_and_texture_registries_validate_native_upload_shapes() {
+        let mut state = NativeRenderState::default();
+        state
+            .register_geometry(
+                7,
+                vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                vec![0, 1, 2],
+                vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .snapshot()
+                .geometry_registry
+                .lock()
+                .unwrap()
+                .get(7)
+                .unwrap()
+                .uvs
+                .len(),
+            3
+        );
+        assert!(state
+            .register_texture(9, 1, 1, vec![255, 0, 0, 255])
+            .is_ok());
+        assert!(state.register_texture(10, 1, 1, vec![255, 0, 0]).is_err());
     }
 }

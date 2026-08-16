@@ -30,6 +30,16 @@ pub struct AssetGeometry {
     pub geometry_id: u64,
     pub positions: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<[f32; 2]>,
+    pub texture: Option<AssetTexture>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssetTexture {
+    pub texture_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -90,7 +100,7 @@ impl AssetStore {
         if let Some(geometry) = self.decoded.get(&key) {
             return Ok(geometry.clone());
         }
-        let (document, buffers, _) = gltf::import(&canonical)
+        let (document, buffers, images) = gltf::import(&canonical)
             .with_context(|| format!("failed to decode glTF asset {}", canonical.display()))?;
         let mesh = document
             .meshes()
@@ -114,6 +124,32 @@ impl AssetStore {
             .read_indices()
             .map(|indices| indices.into_u32().collect::<Vec<_>>())
             .unwrap_or_else(|| (0..positions.len() as u32).collect());
+        let uvs = reader
+            .read_tex_coords(0)
+            .map(|coords| coords.into_f32().map(|[u, v]| [u, v]).collect::<Vec<_>>())
+            .unwrap_or_default();
+        anyhow::ensure!(
+            uvs.is_empty() || uvs.len() == positions.len(),
+            "glTF TEXCOORD_0 count must match POSITION count"
+        );
+        let texture = primitive
+            .material()
+            .pbr_metallic_roughness()
+            .base_color_texture()
+            .and_then(|texture| {
+                let image_index = texture.texture().source().index();
+                let image = images.get(image_index)?;
+                let rgba8 = image_to_rgba8(image)?;
+                let mut texture_hasher = DefaultHasher::new();
+                canonical.hash(&mut texture_hasher);
+                image_index.hash(&mut texture_hasher);
+                Some(AssetTexture {
+                    texture_id: texture_hasher.finish(),
+                    width: image.width,
+                    height: image.height,
+                    rgba8,
+                })
+            });
         let mut hasher = DefaultHasher::new();
         canonical.hash(&mut hasher);
         mesh_index.hash(&mut hasher);
@@ -122,6 +158,8 @@ impl AssetStore {
             geometry_id: hasher.finish(),
             positions,
             indices,
+            uvs,
+            texture,
         });
         self.decoded.insert(key, geometry.clone());
         Ok(geometry)
@@ -137,6 +175,30 @@ impl AssetStore {
             "asset path escapes project root: {display_path}"
         );
         Ok(canonical)
+    }
+}
+
+fn image_to_rgba8(image: &gltf::image::Data) -> Option<Vec<u8>> {
+    match image.format {
+        gltf::image::Format::R8 => {
+            Some(image.pixels.iter().flat_map(|&r| [r, r, r, 255]).collect())
+        }
+        gltf::image::Format::R8G8 => Some(
+            image
+                .pixels
+                .chunks_exact(2)
+                .flat_map(|pixel| [pixel[0], pixel[1], 0, 255])
+                .collect(),
+        ),
+        gltf::image::Format::R8G8B8 => Some(
+            image
+                .pixels
+                .chunks_exact(3)
+                .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+                .collect(),
+        ),
+        gltf::image::Format::R8G8B8A8 => Some(image.pixels.clone()),
+        _ => None,
     }
 }
 
@@ -238,9 +300,12 @@ mod tests {
             br#"{
               "asset": {"version": "2.0"},
               "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
-              "bufferViews": [{"buffer": 0, "byteLength": 36}],
-              "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]}],
-              "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+              "bufferViews": [{"buffer": 0, "byteLength": 36}, {"buffer": 0, "byteLength": 24}],
+              "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]}, {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"}],
+              "images": [{"uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}],
+              "textures": [{"source": 0}],
+              "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+              "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "material": 0}]}],
               "animations": [{"channels": [], "samplers": []}]
             }"#,
         )
@@ -257,6 +322,10 @@ mod tests {
         let geometry = store.load_geometry("public/scene.gltf", 0, 0).unwrap();
         assert_eq!(geometry.positions.len(), 3);
         assert_eq!(geometry.indices, [0, 1, 2]);
+        assert_eq!(geometry.uvs.len(), 3);
+        let texture = geometry.texture.as_ref().unwrap();
+        assert_eq!((texture.width, texture.height), (1, 1));
+        assert_eq!(texture.rgba8.len(), 4);
         assert!(store.load("../outside.bin").is_err());
         fs::remove_dir_all(root).unwrap();
     }

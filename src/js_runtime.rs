@@ -226,7 +226,7 @@ impl JsRuntime {
         context
             .register_global_builtin_callable(
                 js_string!("__hyperthreeRegisterGeometry"),
-                3,
+                4,
                 unsafe {
                     NativeFunction::from_closure(move |_this, args, context| {
                         let geometry_id = geometry_id_arg(args, 0, context)?;
@@ -260,12 +260,22 @@ impl JsRuntime {
                                 })
                                 .collect::<JsResult<Vec<_>>>()?
                         };
+                        let uv_values = number_array_arg(args, 3, context)?;
+                        if uv_values.len() % 2 != 0 {
+                            return Err(JsNativeError::range()
+                                .with_message("UV attribute length must be divisible by 2")
+                                .into());
+                        }
+                        let uvs = uv_values
+                            .chunks_exact(2)
+                            .map(|uv| [uv[0] as f32, uv[1] as f32])
+                            .collect::<Vec<_>>();
                         geometry_state
                             .lock()
                             .map_err(|_| {
                                 JsNativeError::error().with_message("render state poisoned")
                             })?
-                            .register_geometry(geometry_id, positions, indices)
+                            .register_geometry(geometry_id, positions, indices, uvs)
                             .map_err(|error| JsNativeError::range().with_message(error))?;
                         Ok(JsValue::undefined())
                     })
@@ -275,7 +285,7 @@ impl JsRuntime {
 
         let geometry_instance_state = render_state.clone();
         context
-            .register_global_builtin_callable(js_string!("__hyperthreePushGeometry"), 12, unsafe {
+            .register_global_builtin_callable(js_string!("__hyperthreePushGeometry"), 13, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let geometry_id = geometry_id_arg(args, 0, context)?;
                     let position = [
@@ -295,10 +305,18 @@ impl JsRuntime {
                         number_arg(args, 10, context)?,
                         number_arg(args, 11, context)?,
                     ];
+                    let texture_id = optional_texture_id_arg(args, 12, context)?;
                     geometry_instance_state
                         .lock()
                         .map_err(|_| JsNativeError::error().with_message("render state poisoned"))?
-                        .push_custom_mesh(geometry_id, position, scale, rotation_y, color);
+                        .push_custom_mesh_with_texture(
+                            geometry_id,
+                            texture_id,
+                            position,
+                            scale,
+                            rotation_y,
+                            color,
+                        );
                     Ok(JsValue::undefined())
                 })
             })
@@ -529,10 +547,25 @@ impl JsRuntime {
                             geometry.geometry_id,
                             geometry.positions.clone(),
                             geometry.indices.clone(),
+                            geometry.uvs.clone(),
                         )
                         .map_err(|error| JsNativeError::range().with_message(error))?;
-                    state.push_custom_mesh(
+                    let texture_id = if let Some(texture) = &geometry.texture {
+                        state
+                            .register_texture(
+                                texture.texture_id,
+                                texture.width,
+                                texture.height,
+                                texture.rgba8.clone(),
+                            )
+                            .map_err(|error| JsNativeError::range().with_message(error))?;
+                        Some(texture.texture_id)
+                    } else {
+                        None
+                    };
+                    state.push_custom_mesh_with_texture(
                         geometry.geometry_id,
+                        texture_id,
                         position,
                         scale,
                         rotation_y,
@@ -838,6 +871,27 @@ fn geometry_id_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsR
             .into());
     }
     Ok(value as u64)
+}
+
+fn optional_texture_id_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<Option<u64>> {
+    let value = args.get_or_undefined(index);
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    let value = number_arg(args, index, context)?;
+    if value < 0.0 {
+        return Ok(None);
+    }
+    if value.fract() != 0.0 || value > u64::MAX as f64 {
+        return Err(JsNativeError::range()
+            .with_message("texture id must be a non-negative integer")
+            .into());
+    }
+    Ok(Some(value as u64))
 }
 
 fn nonnegative_usize_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<usize> {

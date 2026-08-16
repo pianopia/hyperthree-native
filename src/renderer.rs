@@ -1,5 +1,5 @@
 use crate::bridge::{
-    CameraProjection, CameraSnapshot, GeometryData, GeometryKind, SharedRenderState,
+    CameraProjection, CameraSnapshot, GeometryData, GeometryKind, SharedRenderState, TextureData,
 };
 use anyhow::{Context as _, Result};
 use std::{
@@ -16,32 +16,41 @@ const MAX_INSTANCES: usize = 4096;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
+    uv: [f32; 2],
 }
 
 const CUBE_VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.5, -0.5, 0.5],
+        uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, 0.5],
+        uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, 0.5],
+        uv: [1.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, 0.5],
+        uv: [0.0, 0.0],
     },
     Vertex {
         position: [-0.5, -0.5, -0.5],
+        uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, -0.5],
+        uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, -0.5],
+        uv: [0.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, -0.5],
+        uv: [1.0, 0.0],
     },
 ];
 
@@ -57,15 +66,19 @@ const CUBE_INDICES: &[u16] = &[
 const PLANE_VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.5, -0.5, 0.0],
+        uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, 0.0],
+        uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, 0.0],
+        uv: [1.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, 0.0],
+        uv: [0.0, 0.0],
     },
 ];
 
@@ -87,6 +100,7 @@ struct GpuGeometry {
 
 struct CustomBatch {
     geometry_id: u64,
+    texture_id: Option<u64>,
     instance_offset: usize,
     instance_count: usize,
 }
@@ -106,12 +120,20 @@ pub struct Renderer {
     sphere_index_buffer: wgpu::Buffer,
     sphere_index_count: u32,
     custom_geometries: HashMap<u64, GpuGeometry>,
+    textures: HashMap<u64, GpuTexture>,
     instance_buffer: wgpu::Buffer,
     instance_bind_group: wgpu::BindGroup,
+    instance_bind_group_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
     render_state: SharedRenderState,
     size: PhysicalSize<u32>,
+}
+
+struct GpuTexture {
+    bind_group: wgpu::BindGroup,
+    source: Arc<TextureData>,
 }
 
 impl Renderer {
@@ -172,16 +194,34 @@ impl Renderer {
         let instance_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("hyperthree-instance-layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hyperthree-pipeline-layout"),
@@ -197,7 +237,7 @@ impl Renderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
                 }],
                 compilation_options: Default::default(),
             },
@@ -264,13 +304,67 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let white_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hyperthree-white-texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let white_texture_view = white_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("hyperthree-texture-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &white_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
         let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hyperthree-instance-bind-group"),
             layout: &instance_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: instance_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&white_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&texture_sampler),
+                },
+            ],
         });
         let (depth_texture, depth_view) = create_depth_resources(&device, &config);
 
@@ -289,8 +383,11 @@ impl Renderer {
             sphere_index_buffer,
             sphere_index_count,
             custom_geometries: HashMap::new(),
+            textures: HashMap::new(),
             instance_buffer,
             instance_bind_group,
+            instance_bind_group_layout,
+            texture_sampler,
             depth_texture,
             depth_view,
             render_state,
@@ -357,10 +454,11 @@ impl Renderer {
             .1 = instances.len() - batch_start;
         }
         let mut custom_batches = Vec::new();
-        let mut custom_instances = BTreeMap::<u64, Vec<&crate::bridge::CustomMeshSnapshot>>::new();
+        let mut custom_instances =
+            BTreeMap::<(u64, Option<u64>), Vec<&crate::bridge::CustomMeshSnapshot>>::new();
         for mesh in &snapshot.custom_meshes {
             custom_instances
-                .entry(mesh.geometry_id)
+                .entry((mesh.geometry_id, mesh.texture_id))
                 .or_default()
                 .push(mesh);
         }
@@ -368,12 +466,23 @@ impl Renderer {
             .geometry_registry
             .lock()
             .expect("geometry registry mutex should not be poisoned");
-        for (geometry_id, meshes) in custom_instances {
+        let texture_registry = snapshot
+            .texture_registry
+            .lock()
+            .expect("texture registry mutex should not be poisoned");
+        for ((geometry_id, texture_id), meshes) in custom_instances {
             let Some(data) = registry.get(geometry_id) else {
                 log::warn!("custom geometry {geometry_id} was not registered");
                 continue;
             };
             self.ensure_custom_geometry(geometry_id, data);
+            if let Some(texture_id) = texture_id {
+                if let Some(texture) = texture_registry.get(texture_id) {
+                    self.ensure_texture(texture_id, texture);
+                } else {
+                    log::warn!("custom texture {texture_id} was not registered");
+                }
+            }
             let instance_offset = instances.len();
             for mesh in meshes
                 .iter()
@@ -392,6 +501,7 @@ impl Renderer {
             }
             custom_batches.push(CustomBatch {
                 geometry_id,
+                texture_id,
                 instance_offset,
                 instance_count: instances.len() - instance_offset,
             });
@@ -399,6 +509,7 @@ impl Renderer {
                 break;
             }
         }
+        drop(texture_registry);
         drop(registry);
         if !instances.is_empty() {
             self.queue
@@ -442,8 +553,8 @@ impl Renderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.instance_bind_group, &[]);
             let mut instance_offset = 0;
+            pass.set_bind_group(0, &self.instance_bind_group, &[]);
             for (geometry, count) in batches {
                 if count == 0 {
                     continue;
@@ -478,6 +589,13 @@ impl Renderer {
                 let Some(geometry) = self.custom_geometries.get(&batch.geometry_id) else {
                     continue;
                 };
+                if let Some(texture_id) = batch.texture_id {
+                    if let Some(texture) = self.textures.get(&texture_id) {
+                        pass.set_bind_group(0, &texture.bind_group, &[]);
+                    }
+                } else {
+                    pass.set_bind_group(0, &self.instance_bind_group, &[]);
+                }
                 pass.set_vertex_buffer(0, geometry.vertex_buffer.slice(..));
                 pass.set_index_buffer(geometry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(
@@ -505,7 +623,11 @@ impl Renderer {
             .positions
             .iter()
             .copied()
-            .map(|position| Vertex { position })
+            .enumerate()
+            .map(|(index, position)| Vertex {
+                position,
+                uv: data.uvs.get(index).copied().unwrap_or([0.0, 0.0]),
+            })
             .collect();
         let vertex_buffer = self
             .device
@@ -531,6 +653,75 @@ impl Renderer {
             },
         );
     }
+
+    fn ensure_texture(&mut self, texture_id: u64, data: Arc<TextureData>) {
+        if self
+            .textures
+            .get(&texture_id)
+            .is_some_and(|texture| Arc::ptr_eq(&texture.source, &data))
+        {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hyperthree-native-texture"),
+            size: wgpu::Extent3d {
+                width: data.width,
+                height: data.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data.rgba8,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * data.width),
+                rows_per_image: Some(data.height),
+            },
+            wgpu::Extent3d {
+                width: data.width,
+                height: data.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hyperthree-native-texture-bind-group"),
+            layout: &self.instance_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.instance_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+            ],
+        });
+        self.textures.insert(
+            texture_id,
+            GpuTexture {
+                bind_group,
+                source: data,
+            },
+        );
+    }
 }
 
 fn create_sphere_mesh(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) {
@@ -543,6 +734,7 @@ fn create_sphere_mesh(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) {
             let theta = std::f32::consts::TAU * u;
             vertices.push(Vertex {
                 position: [theta.sin() * phi.sin(), phi.cos(), theta.cos() * phi.sin()],
+                uv: [u, v],
             });
         }
     }

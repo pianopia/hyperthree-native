@@ -57,11 +57,11 @@ globalThis.HyperThreeNative = {
       options.a ?? 1,
     );
   },
-  registerGeometry(id, positions, indices = []) {
-    __hyperthreeRegisterGeometry(id, positions, indices);
+  registerGeometry(id, positions, indices = [], uvs = []) {
+    __hyperthreeRegisterGeometry(id, positions, indices, uvs);
   },
-  pushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1) {
-    __hyperthreePushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a);
+  pushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, textureId = -1) {
+    __hyperthreePushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a, textureId);
   },
   syncThreeScene(scene, camera, options = {}) {
     const maxObjects = options.maxObjects ?? 4096;
@@ -153,6 +153,7 @@ globalThis.HyperThreeNative = {
               customGeometryId,
               positionAttribute.array,
               object.geometry.index?.array ?? [],
+              object.geometry.attributes.uv?.array ?? [],
             );
             hyperthreeRegisteredGeometryIds.add(customGeometryId);
           }
@@ -169,6 +170,7 @@ globalThis.HyperThreeNative = {
             color.g ?? 0.8,
             color.b ?? 0.95,
             alpha,
+            material?.userData?.hyperthreeTextureId ?? -1,
           );
         } else {
           const push = isPlane
