@@ -146,7 +146,6 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register camera binding: {error}"))?;
 
-        let input_state = input_state;
         context
             .register_global_builtin_callable(js_string!("__hyperthreeIsKeyDown"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
