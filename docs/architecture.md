@@ -11,6 +11,7 @@ architecture specification.
 | JS-to-native render bridge | `src/bridge.rs` and `js/three-bridge.js` pass clear color and triangle colors into wgpu | WebGPU device, buffer, texture, and command encoder bindings |
 | Three.js compatibility seam | `js/three-bridge.js` defines the browser-free native contract | bind WebGPU objects and run the Three.js WebGPU backend |
 | GPU-driven rendering | renderer owns the native render pass | compute culling, indirect draw buffers, and instancing benchmark |
+| Distribution and monetization | roadmap and commerce design are documented separately | cross-platform packaging, Connect onboarding, checkout, ledger, payouts, and dashboards |
 
 The project deliberately keeps the JS, asset, and graphics layers independent.
 That makes the expensive V8 and native decoder work incremental instead of

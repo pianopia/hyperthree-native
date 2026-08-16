@@ -52,6 +52,9 @@ cargo run --manifest-path <repo-root>/Cargo.toml -- \
 - `src/project.rs`: `hyperthree.toml`、雛形生成、npmビルド導線
 - `js/`: Three.js 互換層へ接続するゲームエントリーポイント
 - `docs/architecture.md`: 仕様書の各項目と実装状況
+- `docs/platform-support.md`: macOS / Windows / Linux対応計画
+- `docs/commerce-connect-plan.md`: Stripe Connect販売・手数料・振込・管理画面計画
+- `docs/roadmap.md`: ランタイムとコマースの全体ロードマップ
 
 現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
 `HyperThreeNative.setClearColor()` / `setTriangleColor()`で描画状態を変更する
