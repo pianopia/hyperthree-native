@@ -1,6 +1,6 @@
 use crate::{
     asset::{decode_meshopt_buffer, AssetStore},
-    audio::{decode_audio, AudioEngine, AudioPlayback},
+    audio::{decode_audio, AudioEngine, AudioFilter, AudioPlayback},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     draco::decode_mesh as decode_draco_mesh,
     storage::{SandboxFileStore, StorageStore},
@@ -988,7 +988,7 @@ impl JsRuntime {
 
         let audio_engine_for_play = audio_engine.clone();
         context
-            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 7, unsafe {
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 8, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
                     let looped = args.get_or_undefined(1).to_boolean();
@@ -997,6 +997,20 @@ impl JsRuntime {
                     let offset = optional_number_arg(args, 4, context, 0.0)?;
                     let duration = optional_number_arg(args, 5, context, 0.0)?;
                     let speed = optional_number_arg(args, 6, context, 1.0)? as f32;
+                    let filters: Vec<AudioFilter> = optional_string_arg(args, 7, context)?
+                        .map(|value| {
+                            serde_json::from_str::<Vec<AudioFilter>>(&value).map_err(
+                                |error| -> JsError {
+                                    JsNativeError::syntax()
+                                        .with_message(format!(
+                                            "invalid native audio filter graph: {error}"
+                                        ))
+                                        .into()
+                                },
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
                     let id = audio_engine_for_play
                         .borrow_mut()
                         .play(
@@ -1008,6 +1022,7 @@ impl JsRuntime {
                                 offset,
                                 duration,
                                 speed,
+                                filters,
                             },
                         )
                         .map_err(|error| {
@@ -1706,13 +1721,22 @@ impl JsRuntime {
                   if (node._destination && node._destination !== node) registerAudioSource(node._destination, id);
                   if (node.__hyperthreeRegisterSource) node.__hyperthreeRegisterSource(id);
                 };
-                const audioGraphGain = (node) => {
+                const audioGraph = (node) => {
                   let current = node;
+                  let volume = 1;
+                  const filters = [];
                   for (let depth = 0; depth < 16 && current; depth += 1) {
-                    if (current.gain?.value !== undefined) return Number(current.gain.value);
+                    if (current.gain?.value !== undefined && !current.__hyperthreeBiquadFilter) volume *= Number(current.gain.value);
+                    if (current.__hyperthreeBiquadFilter) filters.push({
+                      type: current.type,
+                      frequency: Number(current.frequency.value),
+                      q: Number(current.Q.value),
+                      gain: Number(current.gain.value),
+                      detune: Number(current.detune.value),
+                    });
                     current = current._destination;
                   }
-                  return 1;
+                  return { volume, filters };
                 };
                 globalThis.GainNode = globalThis.GainNode || class GainNode extends AudioNode {
                   constructor(context) {
@@ -1722,6 +1746,17 @@ impl JsRuntime {
                     this.gain = makeAudioParam(this, 1, (value) => {
                       for (const id of this.__hyperthreeSourceIds) __hyperthreeAudioSetVolume(id, value);
                     });
+                  }
+                };
+                globalThis.BiquadFilterNode = globalThis.BiquadFilterNode || class BiquadFilterNode extends AudioNode {
+                  constructor(context) {
+                    super(context);
+                    this.__hyperthreeBiquadFilter = true;
+                    this.type = 'lowpass';
+                    this.frequency = makeAudioParam(this, 350);
+                    this.detune = makeAudioParam(this, 0);
+                    this.Q = makeAudioParam(this, 1);
+                    this.gain = makeAudioParam(this, 0);
                   }
                 };
                 globalThis.AudioBufferSourceNode = globalThis.AudioBufferSourceNode || class AudioBufferSourceNode extends AudioNode {
@@ -1747,9 +1782,9 @@ impl JsRuntime {
                     if (this.__hyperthreeStarted || !this.buffer?.__hyperthreeEncoded) return;
                     this.__hyperthreeStarted = true;
                     const destination = this._destination;
-                    const volume = audioGraphGain(destination);
+                    const graph = audioGraph(destination);
                     const speed = Number(this.playbackRate.value) * Math.pow(2, Number(this.detune.value) / 1200);
-                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, volume, when, offset, duration, speed);
+                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, graph.volume, when, offset, duration, speed, JSON.stringify(graph.filters));
                     this.__hyperthreeAudioId = id;
                     registerAudioSource(destination, id);
                   }
@@ -1823,6 +1858,7 @@ impl JsRuntime {
                   createBufferSource() { return new AudioBufferSourceNode(this); }
                   createGain() { return new GainNode(this); }
                   createPanner() { return new PannerNode(this); }
+                  createBiquadFilter() { return new BiquadFilterNode(this); }
                   resume() { this.state = 'running'; return Promise.resolve(); }
                   suspend() { this.state = 'suspended'; return Promise.resolve(); }
                   close() { this.state = 'closed'; return Promise.resolve(); }
@@ -2732,6 +2768,25 @@ fn string_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult
         })
 }
 
+fn optional_string_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<Option<String>> {
+    let value = args.get_or_undefined(index);
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    value
+        .to_string(context)
+        .map(|value| Some(value.to_std_string_escaped()))
+        .map_err(|_| {
+            JsNativeError::typ()
+                .with_message("native audio filter graph must be a string")
+                .into()
+        })
+}
+
 fn number_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsResult<f64> {
     let value = args.get_or_undefined(index).to_number(context)?;
     if value.is_finite() {
@@ -3278,9 +3333,14 @@ mod tests {
                   .then((audioBuffer) => {
                     const gain = context.createGain();
                     const panner = context.createPanner();
+                    const filter = context.createBiquadFilter();
                     const source = context.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(panner);
+                    filter.type = 'highpass';
+                    filter.frequency.setValueAtTime(440, context.currentTime);
+                    filter.Q.setValueAtTime(0.8, context.currentTime);
+                    source.connect(filter);
+                    filter.connect(panner);
                     panner.connect(gain);
                     gain.connect(context.destination);
                     gain.gain.setValueAtTime(0.5, context.currentTime);
@@ -3294,7 +3354,8 @@ mod tests {
                       Math.abs(audioBuffer.getChannelData(0)[1] - 0.25) < 0.01 &&
                       typeof source.start === 'function' && typeof source.stop === 'function' &&
                       source.playbackRate.value === 1.25 && source.detune.value === 1200 &&
-                      panner.positionX.value === 2 && panner.positionY.value === 3 && panner.positionZ.value === -4;
+                      panner.positionX.value === 2 && panner.positionY.value === 3 && panner.positionZ.value === -4 &&
+                      filter.type === 'highpass' && filter.frequency.value === 440 && filter.Q.value === 0.8;
                   });
                 "#,
             )

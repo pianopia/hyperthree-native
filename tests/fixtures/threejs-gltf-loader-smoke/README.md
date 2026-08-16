@@ -9,6 +9,8 @@ creates a standard Three.js `AudioListener`/`Audio` pair and loads a WAV buffer
 through the native `AudioContext` compatibility surface.
 It also constructs `PositionalAudio` and exercises native panner position and
 playback parameter propagation without requiring a physical audio device.
+The fixture also routes a standard Three.js `Audio` object through a
+`BiquadFilterNode` and verifies the filter graph properties.
 `SkinnedMesh`/`Skeleton` objects,
 advances an `AnimationMixer`, renders `InstancedMesh`/`Line`/`Sprite` objects,
 `BatchedMesh`, shadows, an equirectangular environment, an MRT target, and an

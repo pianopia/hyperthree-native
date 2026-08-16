@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Source, SpatialSink};
+use serde::Deserialize;
+use std::f32::consts::PI;
 use std::{collections::HashMap, io::Cursor, time::Duration};
 
 const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
@@ -20,6 +22,17 @@ pub struct AudioPlayback {
     pub offset: f64,
     pub duration: f64,
     pub speed: f32,
+    pub filters: Vec<AudioFilter>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AudioFilter {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub frequency: f32,
+    pub q: f32,
+    pub gain: f32,
+    pub detune: f32,
 }
 
 pub fn decode_audio(bytes: &[u8]) -> Result<DecodedAudio> {
@@ -114,6 +127,7 @@ impl AudioEngine {
                 playback.when,
                 playback.offset,
                 playback.duration,
+                &playback.filters,
             );
         } else {
             append_source(
@@ -123,6 +137,7 @@ impl AudioEngine {
                 playback.when,
                 playback.offset,
                 playback.duration,
+                &playback.filters,
             );
         }
         sink.play();
@@ -179,8 +194,14 @@ impl AudioEngine {
     }
 }
 
-fn append_source<S>(sink: &SpatialSink, source: S, when: f64, offset: f64, duration: f64)
-where
+fn append_source<S>(
+    sink: &SpatialSink,
+    source: S,
+    when: f64,
+    offset: f64,
+    duration: f64,
+    filters: &[AudioFilter],
+) where
     S: Source<Item = i16> + Send + 'static,
 {
     let delay = seconds_to_duration(when);
@@ -190,13 +211,208 @@ where
     } else {
         Duration::MAX
     };
-    sink.append(
-        source
-            .convert_samples::<f32>()
-            .delay(delay)
-            .skip_duration(skip)
-            .take_duration(take),
-    );
+    let source = FilterSource::new(source.convert_samples::<f32>(), filters);
+    sink.append(source.delay(delay).skip_duration(skip).take_duration(take));
+}
+
+struct FilterSource<S> {
+    input: S,
+    filters: Vec<Biquad>,
+    channel: usize,
+    channels: usize,
+}
+
+impl<S> FilterSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn new(input: S, filters: &[AudioFilter]) -> Self {
+        let channels = input.channels().max(1) as usize;
+        let sample_rate = input.sample_rate();
+        let filters = filters
+            .iter()
+            .filter_map(|filter| Biquad::new(filter, sample_rate, channels))
+            .collect();
+        Self {
+            input,
+            filters,
+            channel: 0,
+            channels,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.channel = 0;
+        for filter in &mut self.filters {
+            filter.reset();
+        }
+    }
+}
+
+impl<S> Iterator for FilterSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut sample = self.input.next()?;
+        for filter in &mut self.filters {
+            sample = filter.process(self.channel, sample);
+        }
+        self.channel = (self.channel + 1) % self.channels;
+        Some(sample)
+    }
+}
+
+impl<S> Source for FilterSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        self.input.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.input.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.input.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.input.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.input.try_seek(pos)?;
+        self.reset();
+        Ok(())
+    }
+}
+
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: Vec<f32>,
+    x2: Vec<f32>,
+    y1: Vec<f32>,
+    y2: Vec<f32>,
+}
+
+impl Biquad {
+    fn new(filter: &AudioFilter, sample_rate: u32, channels: usize) -> Option<Self> {
+        let sample_rate = sample_rate as f32;
+        if sample_rate <= 0.0 {
+            return None;
+        }
+        let frequency = (filter.frequency * 2.0_f32.powf(filter.detune / 1200.0))
+            .clamp(1.0, (sample_rate * 0.49).max(1.0));
+        let q = filter.q.max(0.0001);
+        let gain = filter.gain.clamp(-120.0, 120.0);
+        let omega = 2.0 * PI * frequency / sample_rate;
+        let sin = omega.sin();
+        let cos = omega.cos();
+        let alpha = sin / (2.0 * q);
+        let a = 10.0_f32.powf(gain / 40.0);
+        let beta = 2.0 * a.sqrt() * alpha;
+        let (b0, b1, b2, a0, a1, a2) = match filter.kind.as_str() {
+            "lowpass" => (
+                (1.0 - cos) / 2.0,
+                1.0 - cos,
+                (1.0 - cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
+            "highpass" => (
+                (1.0 + cos) / 2.0,
+                -(1.0 + cos),
+                (1.0 + cos) / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
+            "bandpass" => (
+                sin / 2.0,
+                0.0,
+                -sin / 2.0,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
+            "notch" => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            "allpass" => (
+                1.0 - alpha,
+                -2.0 * cos,
+                1.0 + alpha,
+                1.0 + alpha,
+                -2.0 * cos,
+                1.0 - alpha,
+            ),
+            "peaking" => (
+                1.0 + alpha * a,
+                -2.0 * cos,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cos,
+                1.0 - alpha / a,
+            ),
+            "lowshelf" => (
+                a * ((a + 1.0) - (a - 1.0) * cos + beta),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
+                a * ((a + 1.0) - (a - 1.0) * cos - beta),
+                (a + 1.0) + (a - 1.0) * cos + beta,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
+                (a + 1.0) + (a - 1.0) * cos - beta,
+            ),
+            "highshelf" => (
+                a * ((a + 1.0) + (a - 1.0) * cos + beta),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
+                a * ((a + 1.0) + (a - 1.0) * cos - beta),
+                (a + 1.0) - (a - 1.0) * cos + beta,
+                2.0 * ((a - 1.0) - (a + 1.0) * cos),
+                (a + 1.0) - (a - 1.0) * cos - beta,
+            ),
+            _ => return None,
+        };
+        if !a0.is_finite() || a0.abs() < f32::EPSILON {
+            return None;
+        }
+        Some(Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: vec![0.0; channels],
+            x2: vec![0.0; channels],
+            y1: vec![0.0; channels],
+            y2: vec![0.0; channels],
+        })
+    }
+
+    fn process(&mut self, channel: usize, sample: f32) -> f32 {
+        let output = self.b0 * sample + self.b1 * self.x1[channel] + self.b2 * self.x2[channel]
+            - self.a1 * self.y1[channel]
+            - self.a2 * self.y2[channel];
+        self.x2[channel] = self.x1[channel];
+        self.x1[channel] = sample;
+        self.y2[channel] = self.y1[channel];
+        self.y1[channel] = output;
+        output
+    }
+
+    fn reset(&mut self) {
+        self.x1.fill(0.0);
+        self.x2.fill(0.0);
+        self.y1.fill(0.0);
+        self.y2.fill(0.0);
+    }
 }
 
 fn sanitize_speed(speed: f32) -> f32 {
@@ -217,7 +433,8 @@ fn seconds_to_duration(seconds: f64) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_audio;
+    use super::{decode_audio, AudioFilter, FilterSource};
+    use rodio::buffer::SamplesBuffer;
 
     fn test_wav() -> Vec<u8> {
         let sample_rate = 8u32;
@@ -250,5 +467,44 @@ mod tests {
         assert_eq!(decoded.channels.len(), 1);
         assert!((decoded.channels[0][1] - 0.25).abs() < 0.01);
         assert!((decoded.channels[0][2] + 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn applies_native_biquad_filter_chain_to_multichannel_samples() {
+        let filter = AudioFilter {
+            kind: "lowpass".to_string(),
+            frequency: 400.0,
+            q: 0.707,
+            gain: 0.0,
+            detune: 0.0,
+        };
+        let input = SamplesBuffer::new(2, 48_000, vec![1.0; 128]);
+        let output: Vec<f32> = FilterSource::new(input, &[filter]).collect();
+        assert_eq!(output.len(), 128);
+        assert!(output.iter().all(|sample| sample.is_finite()));
+        assert!(output.iter().any(|sample| *sample < 0.99));
+    }
+
+    #[test]
+    fn supports_web_audio_biquad_filter_types() {
+        for kind in [
+            "lowpass",
+            "highpass",
+            "bandpass",
+            "notch",
+            "allpass",
+            "peaking",
+            "lowshelf",
+            "highshelf",
+        ] {
+            let filter = AudioFilter {
+                kind: kind.to_string(),
+                frequency: 1_000.0,
+                q: 1.0,
+                gain: 6.0,
+                detune: 0.0,
+            };
+            assert!(super::Biquad::new(&filter, 48_000, 2).is_some(), "{kind}");
+        }
     }
 }
