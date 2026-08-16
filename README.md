@@ -81,6 +81,9 @@ SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描�
 `AudioListener`/`Audio`を使ったWAVデコード経路も検証します。Three.js標準API全体の
 互換性はまだ完了しておらず、未実装APIは段階的に追加します。
 
+ゲームのセーブデータには、プロジェクト内の`.hyperthree/storage`へ保存される
+`localStorage`と、セッション限定の`sessionStorage`を利用できます。
+
 ## 構成
 
 - `src/main.rs`: ネイティブホストとイベントループ

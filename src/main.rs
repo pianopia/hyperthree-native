@@ -6,6 +6,7 @@ mod js_runtime;
 mod platform;
 mod project;
 mod renderer;
+mod storage;
 mod webgpu;
 
 use anyhow::{Context, Result};

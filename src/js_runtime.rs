@@ -3,6 +3,7 @@ use crate::{
     audio::{decode_audio, AudioEngine},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     draco::decode_mesh as decode_draco_mesh,
+    storage::StorageStore,
     webgpu::SharedNativeWebGpuContext,
 };
 use anyhow::{Context as _, Result};
@@ -62,6 +63,7 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to create JavaScript context: {error}"))?;
         let runtime_start = Instant::now();
         let audio_engine = Rc::new(RefCell::new(AudioEngine::default()));
+        let storage_store = Rc::new(RefCell::new(StorageStore::new(&asset_root)?));
         context
             .register_global_builtin_callable(js_string!("__hyperthreeNow"), 0, unsafe {
                 NativeFunction::from_closure(move |_this, _args, _context| {
@@ -799,6 +801,36 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register asset fetch binding: {error}"))?;
 
+        let storage_for_load = storage_store.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeStorageLoad"), 0, unsafe {
+                NativeFunction::from_closure(move |_this, _args, _context| {
+                    let payload = storage_for_load.borrow().snapshot_json().map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to load local storage: {error}"))
+                    })?;
+                    Ok(JsValue::from(JsString::from(payload)))
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register storage load binding: {error}"))?;
+
+        let storage_for_save = storage_store.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeStorageSave"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let payload = string_arg(args, 0, context)?;
+                    storage_for_save
+                        .borrow_mut()
+                        .replace_json(&payload)
+                        .map_err(|error| {
+                            JsNativeError::error()
+                                .with_message(format!("failed to save local storage: {error}"))
+                        })?;
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register storage save binding: {error}"))?;
+
         context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeAudio"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
@@ -1342,6 +1374,29 @@ impl JsRuntime {
                     this.lastModified = Number(options.lastModified || 0);
                   }
                 };
+                const makeStorage = (persistent) => {
+                  const values = new Map();
+                  if (persistent) {
+                    const saved = JSON.parse(__hyperthreeStorageLoad() || '{}');
+                    for (const [key, value] of Object.entries(saved)) values.set(String(key), String(value));
+                  }
+                  const persist = () => {
+                    if (!persistent) return;
+                    const saved = {};
+                    for (const [key, value] of values) saved[key] = value;
+                    __hyperthreeStorageSave(JSON.stringify(saved));
+                  };
+                  return {
+                    get length() { return values.size; },
+                    key(index) { return Array.from(values.keys())[Number(index)] ?? null; },
+                    getItem(key) { return values.get(String(key)) ?? null; },
+                    setItem(key, value) { values.set(String(key), String(value)); persist(); },
+                    removeItem(key) { values.delete(String(key)); persist(); },
+                    clear() { values.clear(); persist(); },
+                  };
+                };
+                globalThis.localStorage = globalThis.localStorage || makeStorage(true);
+                globalThis.sessionStorage = globalThis.sessionStorage || makeStorage(false);
                 globalThis.__hyperthreeBlobUrls = globalThis.__hyperthreeBlobUrls || new Map();
                 globalThis.__hyperthreeBlobUrlId = globalThis.__hyperthreeBlobUrlId || 0;
                 globalThis.URL = globalThis.URL || class URL {
@@ -2995,6 +3050,41 @@ mod tests {
                 "if (globalThis.__blobUrlProbe !== true) throw new Error('Blob/File object URL probe failed');",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn local_storage_persists_across_runtime_sessions_inside_project_root() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hyperthree-js-storage-test-{suffix}"));
+        fs::create_dir_all(&root).unwrap();
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state.clone(), &root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                localStorage.setItem('score', 42);
+                localStorage.setItem('pilot', 'Ada');
+                sessionStorage.setItem('temporary', 'yes');
+                const keys = [localStorage.key(0), localStorage.key(1)];
+                if (localStorage.length !== 2 || localStorage.getItem('score') !== '42' ||
+                    !keys.includes('score') || !keys.includes('pilot') || sessionStorage.getItem('temporary') !== 'yes') {
+                  throw new Error('storage API probe failed');
+                }
+                "#,
+            )
+            .unwrap();
+        drop(runtime);
+        let mut restored = JsRuntime::new(render_state, input_state, &root).unwrap();
+        restored
+            .execute_source(
+                "if (localStorage.length !== 2 || localStorage.getItem('score') !== '42' || localStorage.getItem('pilot') !== 'Ada' || sessionStorage.getItem('temporary') !== null) throw new Error('storage persistence probe failed');",
+            )
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
