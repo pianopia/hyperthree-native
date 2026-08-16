@@ -5,7 +5,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { AudioLoader } from "three";
-import { pass, texture3D, vec3 } from "three/tsl";
+import { pass, texture, texture3D, vec2, vec3 } from "three/tsl";
 
 const scene = new THREE.Scene();
 const environmentTexture = new THREE.DataTexture(
@@ -33,6 +33,18 @@ const volumeMaterial = new MeshBasicNodeMaterial({
 const volumeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), volumeMaterial);
 volumeMesh.position.set(-1.5, 0.25, 0);
 scene.add(volumeMesh);
+const arrayTextureData = new Uint8Array([
+  255, 220, 32, 255, 255, 220, 32, 255, 255, 220, 32, 255, 255, 220, 32, 255,
+  32, 220, 255, 255, 32, 220, 255, 255, 32, 220, 255, 255, 32, 220, 255, 255,
+]);
+const arrayTexture = new THREE.DataArrayTexture(arrayTextureData, 2, 2, 2);
+arrayTexture.needsUpdate = true;
+const arrayMaterial = new MeshBasicNodeMaterial({
+  colorNode: texture(arrayTexture).depth(1).sample(vec2(0.5, 0.5)),
+});
+const arrayMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.35), arrayMaterial);
+arrayMesh.position.set(-1.5, -0.35, 0);
+scene.add(arrayMesh);
 const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
 directionalLight.position.set(2, 4, 3);
 directionalLight.castShadow = true;
@@ -131,6 +143,7 @@ globalThis.__gltfExternalTexture = false;
 globalThis.__gltfTextureLoaderSmoke = false;
 globalThis.__gltfCubeTextureSmoke = false;
 globalThis.__gltfData3DTextureSmoke = false;
+globalThis.__gltfDataArrayTextureSmoke = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
@@ -595,6 +608,10 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     volumeTexture.image.width === 2 && volumeTexture.image.height === 2 &&
     volumeTexture.image.depth === 2 && volumeTexture.image.data?.byteLength === 32 &&
     volumeMaterial.colorNode !== null;
+  globalThis.__gltfDataArrayTextureSmoke = arrayTexture.isDataArrayTexture === true &&
+    arrayTexture.image.width === 2 && arrayTexture.image.height === 2 &&
+    arrayTexture.image.depth === 2 && arrayTexture.image.data?.byteLength === 32 &&
+    arrayMaterial.colorNode !== null;
   const ktx2Loader = new KTX2Loader();
   ktx2Loader.detectSupport(renderer);
   renderer.setSize(640, 360, false);
@@ -766,6 +783,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfTextureLoaderSmoke ||
       !globalThis.__gltfCubeTextureSmoke ||
       !globalThis.__gltfData3DTextureSmoke ||
+      !globalThis.__gltfDataArrayTextureSmoke ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfRendererReadbackSmoke ||
