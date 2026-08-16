@@ -131,7 +131,8 @@ API網羅、その他の標準Web API互換性は継続対応します。RGBA画
 `HTMLVideoElement`の連続フレーム境界と、2フレームGIFの遅延時間・`requestVideoFrameCallback()`・
 `VideoTexture`利用経路、`TextureLoader`と`CubeTextureLoader`の画像／キューブ環境テクスチャ経路も
 同じThree.js WebGPU fixtureで検証済みです。`Data3DTexture`をTSL `texture3D`でサンプリングする
-ボリューム／arrayテクスチャ経路も検証済みです。H.264/VP9/AV1等の動画codec、
+ボリューム／arrayテクスチャ経路、GIF動画の`currentTime`／`fastSeek()`シークも検証済みです。
+H.264/VP9/AV1等の動画codec、
 動画音声トラック、ランダムシーク、OS hardware decoder接続は未実装の残タスクです。
 
 Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階計画は

@@ -181,6 +181,7 @@ globalThis.__gltfExternalTextureSmoke = false;
 globalThis.__gltfVideoFrameSmoke = false;
 globalThis.__gltfVideoElementSmoke = false;
 globalThis.__gltfAnimatedVideoSmoke = false;
+globalThis.__gltfAnimatedVideoSeekSmoke = false;
 globalThis.__gltfResourceLifecycleSmoke = false;
 globalThis.__gltfCanvasLifecycleSmoke = false;
 globalThis.__gltfCanvasAlphaSmoke = false;
@@ -245,6 +246,12 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     animatedVideo.duration >= 0.1 && animatedVideo.videoWidth === 1 && animatedVideo.videoHeight === 1 &&
     animatedVideo.currentTime > 0;
   animatedVideo.pause();
+  animatedVideo.currentTime = 0.05;
+  const seekRedFrame = animatedVideo.currentFrame?.data?.[0] === 255 && animatedVideo.currentFrame?.data?.[2] === 0;
+  animatedVideo.fastSeek(0.15);
+  const seekBlueFrame = animatedVideo.currentFrame?.data?.[0] === 0 && animatedVideo.currentFrame?.data?.[2] === 255;
+  globalThis.__gltfAnimatedVideoSeekSmoke = seekRedFrame && seekBlueFrame &&
+    Math.abs(animatedVideo.currentTime - 0.15) < 0.001;
   const externalFrame = new VideoFrame({
     width: 1,
     height: 1,
@@ -801,6 +808,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       !globalThis.__gltfVideoFrameSmoke ||
       !globalThis.__gltfVideoElementSmoke ||
       !globalThis.__gltfAnimatedVideoSmoke ||
+      !globalThis.__gltfAnimatedVideoSeekSmoke ||
       !globalThis.__gltfCanvasLifecycleSmoke ||
       !globalThis.__gltfCanvasAlphaSmoke) {
     throw new Error("standard Three.js compatibility fixture assertions failed");

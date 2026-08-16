@@ -135,6 +135,8 @@ JavaScriptへ持ち込むものではない。native decoderと連続frame sched
 `currentTime`とループ／終了を進めるため、Three.jsの`VideoTexture`が使う連続frame契約まで
 Three.js WebGPU互換fixtureで固定している。一方、H.264/VP9/AV1等の動画codec、音声トラック、ランダムシーク、
 OSのhardware decoder接続は、別のnative media backendの残タスクである。
+画像動画境界では`currentTime` setterと`fastSeek()`によるフレーム再選択もfixtureで検証済みであり、
+native codec接続時も同じメディア時刻契約へ差し替える。
 Three.js共通バックエンドがRenderBundleEncoderへ記録時に呼ぶviewport/scissor/blend/stencil
 setterは、WebGPUの仕様上RenderPass側の状態が権威となるため、実行時にRenderBundleへ
 誤って状態を持ち込まない互換no-opとして公開している。

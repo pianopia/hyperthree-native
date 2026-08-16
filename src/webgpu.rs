@@ -4285,7 +4285,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       this.data = new Uint8Array(0);
       this.videoWidth = 0;
       this.videoHeight = 0;
-      this.currentTime = 0;
+      this._currentTime = 0;
       this.duration = 0;
       this.readyState = 0;
       this.networkState = 0;
@@ -4309,6 +4309,17 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     get currentSrc() { return this._src; }
     get width() { return this.videoWidth; }
     get height() { return this.videoHeight; }
+    get currentTime() { return this._currentTime; }
+    set currentTime(value) {
+      let nextTime = Number(value);
+      if (!Number.isFinite(nextTime) || nextTime < 0) nextTime = 0;
+      if (this.duration > 0) nextTime = Math.min(nextTime, this.duration);
+      this._currentTime = nextTime;
+      if (this.currentFrame && this.__frames.length > 0) {
+        const nextFrame = this.__frameIndexForTime(nextTime);
+        if (nextFrame !== this.__frameIndex) this.__setFrame(nextFrame);
+      }
+    }
     addEventListener(type, listener) {
       if (typeof listener !== 'function') return;
       const listeners = this.__listeners.get(type) || new Set();
@@ -4457,6 +4468,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
       if (this.__rafId !== null) cancelAnimationFrame(this.__rafId);
       this.__rafId = null;
       this.dispatchEvent(new Event('pause'));
+    }
+    fastSeek(time) {
+      this.ended = false;
+      this.currentTime = time;
+      this.dispatchEvent(new Event('seeked'));
     }
     requestVideoFrameCallback(callback) {
       if (typeof callback !== 'function') throw new TypeError('video frame callback must be a function');
