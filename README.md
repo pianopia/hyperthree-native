@@ -9,9 +9,8 @@
 AIでゲームを作る場合は、まずプロジェクト雛形を生成します。
 
 ```bash
-cargo run --manifest-path <repo-root>/Cargo.toml -- \
-  init <game-project>
-cd <game-project>
+cargo run -- init ../my-hyperthree-game
+cd ../my-hyperthree-game
 npm install
 ```
 
@@ -19,23 +18,22 @@ AIには `src/game.js` と `hyperthree.toml` を編集させます。Three.jsの
 含むIIFEバンドルを作成し、ネイティブホストへ渡せます。
 
 ```bash
-cargo run --manifest-path <repo-root>/Cargo.toml -- \
-  build --project <game-project>
-cargo run --manifest-path <repo-root>/Cargo.toml -- \
-  run --project <game-project>
+# Run these commands from the HyperThree Native repository root.
+cargo run -- build --project ../my-hyperthree-game
+cargo run -- run --project ../my-hyperthree-game
 ```
 
 ## 単体ホスト起動
 
 ```bash
-cargo run --manifest-path <repo-root>/Cargo.toml
+cargo run
 ```
 
 GPUドライバとOS別バックエンドの確認には、ウィンドウを開かない診断コマンド
 を使います。
 
 ```bash
-cargo run --manifest-path <repo-root>/Cargo.toml -- diagnostics
+cargo run -- diagnostics
 ```
 
 起動すると `js/game.js` を評価したあと、ネイティブウィンドウを開きます。
@@ -45,8 +43,7 @@ wgpu の直接描画でキューブが表示されれば、イベントループ
 ゼロコピー読み込みの確認には、任意のバイナリを渡します。
 
 ```bash
-cargo run --manifest-path <repo-root>/Cargo.toml -- \
-  --asset /path/to/asset.glb
+cargo run -- --asset /path/to/asset.glb
 ```
 
 ゲームコードからは、プロジェクトルート配下のアセットをネイティブ側で
