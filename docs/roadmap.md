@@ -12,6 +12,7 @@
 - [x] Project-relative mmap asset API and glTF/GLB metadata inspection
 - [x] Native glTF/GLB POSITION/index decode and cached GPU geometry upload
 - [x] Boa ES module execution with relative and `node_modules` resolution
+- [x] Native `performance.now()` and requestAnimationFrame compatibility loop
 - [ ] Native audio and sandboxed filesystem data APIs
 - [ ] Embedded V8 isolate and module/runtime compatibility
 - [x] Three.js scene sync for BoxGeometry, PlaneGeometry, and SphereGeometry

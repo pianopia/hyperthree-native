@@ -68,7 +68,9 @@ POSITION/indexバッファをGPUへ登録します。Three.jsの任意の位置�
 
 `src/game.mjs`などのES moduleエントリも、相対importとプロジェクトの
 `node_modules`パッケージ解決に対応しています。IIFEへバンドルする既存の
-Vite導線も引き続き利用できます。
+Vite導線も引き続き利用できます。実行時には`performance.now()`、
+`requestAnimationFrame()`、`cancelAnimationFrame()`、`window`、`self`、`global`
+の基本互換もネイティブフレームループへ接続されます。
 
 ## 構成
 

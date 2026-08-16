@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 /// JavaScript execution boundary.
@@ -41,6 +42,18 @@ impl JsRuntime {
             .module_loader(module_loader)
             .build()
             .map_err(|error| anyhow::anyhow!("failed to create JavaScript context: {error}"))?;
+        let runtime_start = Instant::now();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeNow"), 0, unsafe {
+                NativeFunction::from_closure(move |_this, _args, _context| {
+                    Ok(JsValue::from(
+                        runtime_start.elapsed().as_secs_f64() * 1000.0,
+                    ))
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register runtime clock binding: {error}")
+            })?;
         let clear_state = render_state.clone();
         context
             .register_global_builtin_callable(
@@ -530,6 +543,33 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register asset draw binding: {error}"))?;
 
+        context
+            .eval(Source::from_bytes(
+                r#"
+                globalThis.performance = globalThis.performance || {
+                  now: () => __hyperthreeNow(),
+                };
+                globalThis.window = globalThis.window || globalThis;
+                globalThis.self = globalThis.self || globalThis;
+                globalThis.global = globalThis.global || globalThis;
+                globalThis.__hyperthreeAnimationFrameQueue = [];
+                globalThis.__hyperthreeAnimationFrameId = 0;
+                globalThis.requestAnimationFrame = (callback) => {
+                  const id = ++globalThis.__hyperthreeAnimationFrameId;
+                  globalThis.__hyperthreeAnimationFrameQueue.push({ id, callback });
+                  return id;
+                };
+                globalThis.cancelAnimationFrame = (id) => {
+                  globalThis.__hyperthreeAnimationFrameQueue =
+                    globalThis.__hyperthreeAnimationFrameQueue.filter((entry) => entry.id !== id);
+                };
+                "#,
+            ))
+            .map(|_| ())
+            .map_err(|error| {
+                anyhow::anyhow!("failed to install runtime compatibility globals: {error}")
+            })?;
+
         Ok(Self { context })
     }
 
@@ -576,7 +616,7 @@ impl JsRuntime {
 
     pub fn execute_frame(&mut self, delta_seconds: f64) -> Result<()> {
         let source = format!(
-            "if (typeof globalThis.HyperThreeGame !== 'undefined' && typeof globalThis.HyperThreeGame.update === 'function') globalThis.HyperThreeGame.update({delta_seconds});"
+            "(() => {{ const pendingFrames = globalThis.__hyperthreeAnimationFrameQueue || []; globalThis.__hyperthreeAnimationFrameQueue = []; pendingFrames.forEach((entry) => {{ if (typeof entry.callback === 'function') entry.callback(performance.now()); }}); }})(); if (typeof globalThis.HyperThreeGame !== 'undefined' && typeof globalThis.HyperThreeGame.update === 'function') globalThis.HyperThreeGame.update({delta_seconds});"
         );
         self.execute_source(&source)
     }
@@ -902,6 +942,28 @@ mod tests {
         let snapshot = render_state.lock().unwrap().snapshot();
         assert_eq!(snapshot.cubes[0].position, [12.0, 24.0, 0.0]);
         assert_eq!(snapshot.cubes[0].color[0], 1.0);
+    }
+
+    #[test]
+    fn runtime_compatibility_globals_drive_animation_frames() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state.clone(), input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                requestAnimationFrame((timestamp) => {
+                  __hyperthreeBeginFrame();
+                  __hyperthreePushCube(timestamp >= 0 ? 1 : 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 1, 0);
+                });
+                "#,
+            )
+            .unwrap();
+        runtime.execute_frame(1.0 / 60.0).unwrap();
+        let snapshot = render_state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.cubes[0].position[0], 1.0);
+        runtime.execute_frame(1.0 / 60.0).unwrap();
     }
 
     #[test]
