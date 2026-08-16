@@ -689,7 +689,7 @@ impl NativeWebGpuContext {
             sample_count: info.sample_count,
             dimension: texture_dimension(info.dimension),
             format: texture_format(info.format),
-            usage: texture_usage(info.usage),
+            usage: texture_usage_for_dimension(info.usage, info.dimension),
             view_formats: &[],
         });
         self.resources
@@ -4098,6 +4098,21 @@ fn texture_usage(bits: u64) -> wgpu::TextureUsages {
     usage
 }
 
+fn texture_usage_for_dimension(bits: u64, dimension: &str) -> wgpu::TextureUsages {
+    let mut usage = texture_usage(bits);
+    if matches!(
+        texture_dimension(dimension),
+        wgpu::TextureDimension::D1 | wgpu::TextureDimension::D3
+    ) {
+        // wgpu rejects RENDER_ATTACHMENT for 1D/3D textures even when a
+        // higher-level renderer includes the usage in its shared descriptor.
+        // Keep the valid usages so Three.js Data3DTexture/DataTexture paths
+        // remain portable across native backends.
+        usage.remove(wgpu::TextureUsages::RENDER_ATTACHMENT);
+    }
+    usage
+}
+
 fn texture_format(format: &str) -> wgpu::TextureFormat {
     match format {
         "r8unorm" => wgpu::TextureFormat::R8Unorm,
@@ -5112,7 +5127,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_wgsl, texture_format};
+    use super::{sanitize_wgsl, texture_format, texture_usage_for_dimension};
 
     #[test]
     fn removes_unsupported_wgsl_diagnostic_directives() {
@@ -5184,5 +5199,13 @@ mod tests {
             texture_format("depth32float-stencil8"),
             wgpu::TextureFormat::Depth32FloatStencil8
         );
+    }
+
+    #[test]
+    fn removes_invalid_render_attachment_usage_from_non_2d_textures() {
+        let usage = texture_usage_for_dimension(2 | 4 | 16, "3d");
+        assert!(usage.contains(wgpu::TextureUsages::COPY_DST));
+        assert!(usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+        assert!(!usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
     }
 }

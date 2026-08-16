@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { MeshPhysicalNodeMaterial, PostProcessing, WebGPURenderer } from "three/webgpu";
+import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, PostProcessing, WebGPURenderer } from "three/webgpu";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { AudioLoader } from "three";
-import { pass } from "three/tsl";
+import { pass, texture3D, vec3 } from "three/tsl";
 
 const scene = new THREE.Scene();
 const environmentTexture = new THREE.DataTexture(
@@ -21,6 +21,18 @@ environmentTexture.colorSpace = THREE.SRGBColorSpace;
 environmentTexture.mapping = THREE.EquirectangularReflectionMapping;
 environmentTexture.needsUpdate = true;
 scene.environment = environmentTexture;
+const volumeTextureData = new Uint8Array([
+  255, 64, 64, 255, 64, 255, 64, 255, 64, 64, 255, 255, 255, 255, 64, 255,
+  255, 64, 64, 255, 64, 255, 64, 255, 64, 64, 255, 255, 255, 255, 64, 255,
+]);
+const volumeTexture = new THREE.Data3DTexture(volumeTextureData, 2, 2, 2);
+volumeTexture.needsUpdate = true;
+const volumeMaterial = new MeshBasicNodeMaterial({
+  colorNode: texture3D(volumeTexture, vec3(0.5, 0.5, 0.5)),
+});
+const volumeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), volumeMaterial);
+volumeMesh.position.set(-1.5, 0.25, 0);
+scene.add(volumeMesh);
 const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
 directionalLight.position.set(2, 4, 3);
 directionalLight.castShadow = true;
@@ -118,6 +130,7 @@ globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfTextureLoaderSmoke = false;
 globalThis.__gltfCubeTextureSmoke = false;
+globalThis.__gltfData3DTextureSmoke = false;
 globalThis.__gltfGlbLoaded = false;
 globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfKtx2Loaded = false;
@@ -578,6 +591,10 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfCubeTextureSmoke = cubeTexture.isCubeTexture === true &&
     cubeTexture.images.length === 6 && cubeTexture.images.every(image =>
       image instanceof HTMLImageElement && image.complete === true && image.data?.byteLength === 4);
+  globalThis.__gltfData3DTextureSmoke = volumeTexture.isData3DTexture === true &&
+    volumeTexture.image.width === 2 && volumeTexture.image.height === 2 &&
+    volumeTexture.image.depth === 2 && volumeTexture.image.data?.byteLength === 32 &&
+    volumeMaterial.colorNode !== null;
   const ktx2Loader = new KTX2Loader();
   ktx2Loader.detectSupport(renderer);
   renderer.setSize(640, 360, false);
@@ -748,6 +765,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfTextureLoaderSmoke ||
       !globalThis.__gltfCubeTextureSmoke ||
+      !globalThis.__gltfData3DTextureSmoke ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfRendererReadbackSmoke ||

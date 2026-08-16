@@ -82,7 +82,7 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 用意した。`navigator.userAgent`、`console`、data URL、JPEG/PNG/WebP/GIF/BMP/HDR/EXR/TIFF decode、
 `ImageData`入力と`createImageBitmap()`のcrop/resize/flipY/premultiplyオプション、
 native `HTMLImageElement`/`TextureLoader`の`onload`/`decode`、`CubeTextureLoader`の6面画像と
-キューブ環境のRGBA GPU upload、
+キューブ環境のRGBA GPU upload、`Data3DTexture`の3D upload/viewとTSL `texture3D` sampling、
 `GPUQueue.copyExternalImageToTexture`、GPUBuffer readbackも含め、Three.js 0.179の
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
 AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
