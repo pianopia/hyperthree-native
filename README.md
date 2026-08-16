@@ -99,5 +99,10 @@ Vite導線も引き続き利用できます。実行時には`performance.now()`
 バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
 完全な直接VRAM転送を引き続き実装する必要があります。
 
+Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階計画は
+[`docs/threejs-compatibility-architecture.md`](docs/threejs-compatibility-architecture.md)
+にまとめています。現在は移行第一段階として、法線、PBR係数、DirectionalLight、
+`matrixWorld`をネイティブ直接光PBRパスへ接続しています。
+
 入力は`isKeyDown()`、`isMouseButtonDown()`、`getMousePosition()`から取得でき、
 PerspectiveCameraとOrthographicCameraの両方を同期できます。

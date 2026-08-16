@@ -1,5 +1,6 @@
 use crate::bridge::{
-    CameraProjection, CameraSnapshot, GeometryData, GeometryKind, SharedRenderState, TextureData,
+    CameraProjection, CameraSnapshot, GeometryData, GeometryKind, MaterialSnapshot,
+    SharedRenderState, TextureData,
 };
 use anyhow::{Context as _, Result};
 use std::{
@@ -16,40 +17,49 @@ const MAX_INSTANCES: usize = 4096;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
+    normal: [f32; 3],
     uv: [f32; 2],
 }
 
 const CUBE_VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.5, -0.5, 0.5],
+        normal: [0.0, 0.0, 1.0],
         uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, 0.5],
+        normal: [0.0, 0.0, 1.0],
         uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, 0.5],
+        normal: [0.0, 0.0, 1.0],
         uv: [1.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, 0.5],
+        normal: [0.0, 0.0, 1.0],
         uv: [0.0, 0.0],
     },
     Vertex {
         position: [-0.5, -0.5, -0.5],
+        normal: [0.0, 0.0, -1.0],
         uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, -0.5],
+        normal: [0.0, 0.0, -1.0],
         uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, -0.5],
+        normal: [0.0, 0.0, -1.0],
         uv: [0.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, -0.5],
+        normal: [0.0, 0.0, -1.0],
         uv: [1.0, 0.0],
     },
 ];
@@ -66,18 +76,22 @@ const CUBE_INDICES: &[u16] = &[
 const PLANE_VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.5, -0.5, 0.0],
+        normal: [0.0, 0.0, 1.0],
         uv: [0.0, 1.0],
     },
     Vertex {
         position: [0.5, -0.5, 0.0],
+        normal: [0.0, 0.0, 1.0],
         uv: [1.0, 1.0],
     },
     Vertex {
         position: [0.5, 0.5, 0.0],
+        normal: [0.0, 0.0, 1.0],
         uv: [1.0, 0.0],
     },
     Vertex {
         position: [-0.5, 0.5, 0.0],
+        normal: [0.0, 0.0, 1.0],
         uv: [0.0, 0.0],
     },
 ];
@@ -88,7 +102,20 @@ const PLANE_INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
     mvp: [[f32; 4]; 4],
-    color: [f32; 4],
+    model: [[f32; 4]; 4],
+    normal_matrix: [[f32; 4]; 4],
+    base_color: [f32; 4],
+    material: [f32; 4],
+    emissive: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrameUniform {
+    camera_position: [f32; 4],
+    light_direction: [f32; 4],
+    light_color: [f32; 4],
+    ambient: [f32; 4],
 }
 
 struct GpuGeometry {
@@ -124,6 +151,7 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     instance_bind_group: wgpu::BindGroup,
     instance_bind_group_layout: wgpu::BindGroupLayout,
+    frame_buffer: wgpu::Buffer,
     texture_sampler: wgpu::Sampler,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -221,6 +249,16 @@ impl Renderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -237,7 +275,7 @@ impl Renderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
                 }],
                 compilation_options: Default::default(),
             },
@@ -304,6 +342,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hyperthree-frame-uniform"),
+            size: std::mem::size_of::<FrameUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let white_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hyperthree-white-texture"),
             size: wgpu::Extent3d {
@@ -364,6 +408,10 @@ impl Renderer {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&texture_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: frame_buffer.as_entire_binding(),
+                },
             ],
         });
         let (depth_texture, depth_view) = create_depth_resources(&device, &config);
@@ -387,6 +435,7 @@ impl Renderer {
             instance_buffer,
             instance_bind_group,
             instance_bind_group_layout,
+            frame_buffer,
             texture_sampler,
             depth_texture,
             depth_view,
@@ -419,6 +468,37 @@ impl Renderer {
             log::warn!("native instance limit reached; rendering first {MAX_INSTANCES} cubes");
         }
         let aspect = self.config.width as f32 / self.config.height as f32;
+        let light = snapshot.directional_light;
+        self.queue.write_buffer(
+            &self.frame_buffer,
+            0,
+            bytemuck::bytes_of(&FrameUniform {
+                camera_position: [
+                    snapshot.camera.position[0] as f32,
+                    snapshot.camera.position[1] as f32,
+                    snapshot.camera.position[2] as f32,
+                    1.0,
+                ],
+                light_direction: [
+                    light.direction[0] as f32,
+                    light.direction[1] as f32,
+                    light.direction[2] as f32,
+                    light.intensity as f32,
+                ],
+                light_color: [
+                    light.color[0] as f32,
+                    light.color[1] as f32,
+                    light.color[2] as f32,
+                    1.0,
+                ],
+                ambient: [
+                    light.ambient[0] as f32,
+                    light.ambient[1] as f32,
+                    light.ambient[2] as f32,
+                    1.0,
+                ],
+            }),
+        );
         let mut instances = Vec::with_capacity(instance_count);
         let mut batches = [
             (GeometryKind::Cube, 0_usize),
@@ -435,16 +515,15 @@ impl Renderer {
                 .iter()
                 .filter(|mesh| mesh.geometry as u8 == geometry as u8)
             {
-                instances.push(Instance {
-                    mvp: build_mvp_values(
-                        &snapshot.camera,
-                        mesh.position,
-                        mesh.scale,
-                        mesh.rotation_y,
-                        aspect,
-                    ),
-                    color: mesh.color.map(|component| component as f32),
-                });
+                instances.push(build_instance(
+                    &snapshot.camera,
+                    mesh.position,
+                    mesh.scale,
+                    mesh.rotation_y,
+                    mesh.model_matrix,
+                    mesh.material,
+                    aspect,
+                ));
             }
             batches[match geometry {
                 GeometryKind::Cube => 0,
@@ -488,16 +567,15 @@ impl Renderer {
                 .iter()
                 .take(MAX_INSTANCES.saturating_sub(instance_offset))
             {
-                instances.push(Instance {
-                    mvp: build_mvp_values(
-                        &snapshot.camera,
-                        mesh.position,
-                        mesh.scale,
-                        mesh.rotation_y,
-                        aspect,
-                    ),
-                    color: mesh.color.map(|component| component as f32),
-                });
+                instances.push(build_instance(
+                    &snapshot.camera,
+                    mesh.position,
+                    mesh.scale,
+                    mesh.rotation_y,
+                    mesh.model_matrix,
+                    mesh.material,
+                    aspect,
+                ));
             }
             custom_batches.push(CustomBatch {
                 geometry_id,
@@ -626,6 +704,7 @@ impl Renderer {
             .enumerate()
             .map(|(index, position)| Vertex {
                 position,
+                normal: data.normals.get(index).copied().unwrap_or([0.0, 1.0, 0.0]),
                 uv: data.uvs.get(index).copied().unwrap_or([0.0, 0.0]),
             })
             .collect();
@@ -712,6 +791,10 @@ impl Renderer {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.frame_buffer.as_entire_binding(),
+                },
             ],
         });
         self.textures.insert(
@@ -734,6 +817,7 @@ fn create_sphere_mesh(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) {
             let theta = std::f32::consts::TAU * u;
             vertices.push(Vertex {
                 position: [theta.sin() * phi.sin(), phi.cos(), theta.cos() * phi.sin()],
+                normal: [theta.sin() * phi.sin(), phi.cos(), theta.cos() * phi.sin()],
                 uv: [u, v],
             });
         }
@@ -778,11 +862,9 @@ fn create_depth_resources(
     (texture, view)
 }
 
-fn build_mvp_values(
+fn build_mvp_from_model(
     camera: &CameraSnapshot,
-    position: [f64; 3],
-    scale_values: [f64; 3],
-    rotation_y_value: f64,
+    model: &[[f32; 4]; 4],
     aspect: f32,
 ) -> [[f32; 4]; 4] {
     let eye = vec3(camera.position);
@@ -817,14 +899,66 @@ fn build_mvp_values(
             camera.far as f32,
         ),
     };
-    let model = mat_mul(
+    mat_mul(&projection, &mat_mul(&view, model))
+}
+
+fn build_model_values(
+    position: [f64; 3],
+    scale_values: [f64; 3],
+    rotation_y_value: f64,
+) -> [[f32; 4]; 4] {
+    mat_mul(
         &translation(vec3(position)),
         &mat_mul(
             &rotation_y(rotation_y_value as f32),
             &scale(vec3(scale_values)),
         ),
-    );
-    mat_mul(&projection, &mat_mul(&view, &model))
+    )
+}
+
+fn build_normal_matrix_values(scale_values: [f64; 3], rotation_y_value: f64) -> [[f32; 4]; 4] {
+    mat_mul(
+        &rotation_y(rotation_y_value as f32),
+        &scale(Vec3 {
+            x: 1.0 / scale_values[0] as f32,
+            y: 1.0 / scale_values[1] as f32,
+            z: 1.0 / scale_values[2] as f32,
+        }),
+    )
+}
+
+fn build_instance(
+    camera: &CameraSnapshot,
+    position: [f64; 3],
+    scale: [f64; 3],
+    rotation_y: f64,
+    model_matrix: Option<[[f64; 4]; 4]>,
+    material: MaterialSnapshot,
+    aspect: f32,
+) -> Instance {
+    let model = model_matrix
+        .map(|matrix| matrix.map(|column| column.map(|value| value as f32)))
+        .unwrap_or_else(|| build_model_values(position, scale, rotation_y));
+    Instance {
+        mvp: build_mvp_from_model(camera, &model, aspect),
+        model,
+        normal_matrix: model_matrix
+            .map(|_| model)
+            .unwrap_or_else(|| build_normal_matrix_values(scale, rotation_y)),
+        base_color: material.base_color.map(|component| component as f32),
+        material: [
+            material.metallic as f32,
+            material.roughness as f32,
+            if material.unlit { 1.0 } else { 0.0 },
+            0.0,
+        ],
+        emissive: [
+            material.emissive[0] as f32,
+            material.emissive[1] as f32,
+            material.emissive[2] as f32,
+            0.0,
+        ],
+    }
 }
 
 #[derive(Clone, Copy)]

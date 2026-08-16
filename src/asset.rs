@@ -30,8 +30,31 @@ pub struct AssetGeometry {
     pub geometry_id: u64,
     pub positions: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
     pub texture: Option<AssetTexture>,
+    pub material: AssetMaterial,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AssetMaterial {
+    pub base_color: [f64; 4],
+    pub metallic: f64,
+    pub roughness: f64,
+    pub emissive: [f64; 3],
+    pub unlit: bool,
+}
+
+impl Default for AssetMaterial {
+    fn default() -> Self {
+        Self {
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic: 0.0,
+            roughness: 1.0,
+            emissive: [0.0, 0.0, 0.0],
+            unlit: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +147,14 @@ impl AssetStore {
             .read_indices()
             .map(|indices| indices.into_u32().collect::<Vec<_>>())
             .unwrap_or_else(|| (0..positions.len() as u32).collect());
+        let normals = reader
+            .read_normals()
+            .map(|normals| normals.collect::<Vec<_>>())
+            .unwrap_or_else(|| generate_vertex_normals(&positions, &indices));
+        anyhow::ensure!(
+            normals.len() == positions.len(),
+            "glTF NORMAL count must match POSITION count"
+        );
         let uvs = reader
             .read_tex_coords(0)
             .map(|coords| coords.into_f32().map(|[u, v]| [u, v]).collect::<Vec<_>>())
@@ -132,24 +163,28 @@ impl AssetStore {
             uvs.is_empty() || uvs.len() == positions.len(),
             "glTF TEXCOORD_0 count must match POSITION count"
         );
-        let texture = primitive
-            .material()
-            .pbr_metallic_roughness()
-            .base_color_texture()
-            .and_then(|texture| {
-                let image_index = texture.texture().source().index();
-                let image = images.get(image_index)?;
-                let rgba8 = image_to_rgba8(image)?;
-                let mut texture_hasher = DefaultHasher::new();
-                canonical.hash(&mut texture_hasher);
-                image_index.hash(&mut texture_hasher);
-                Some(AssetTexture {
-                    texture_id: texture_hasher.finish(),
-                    width: image.width,
-                    height: image.height,
-                    rgba8,
-                })
-            });
+        let pbr = primitive.material().pbr_metallic_roughness();
+        let texture = pbr.base_color_texture().and_then(|texture| {
+            let image_index = texture.texture().source().index();
+            let image = images.get(image_index)?;
+            let rgba8 = image_to_rgba8(image)?;
+            let mut texture_hasher = DefaultHasher::new();
+            canonical.hash(&mut texture_hasher);
+            image_index.hash(&mut texture_hasher);
+            Some(AssetTexture {
+                texture_id: texture_hasher.finish(),
+                width: image.width,
+                height: image.height,
+                rgba8,
+            })
+        });
+        let material = AssetMaterial {
+            base_color: pbr.base_color_factor().map(f64::from),
+            metallic: f64::from(pbr.metallic_factor()),
+            roughness: f64::from(pbr.roughness_factor()),
+            emissive: primitive.material().emissive_factor().map(f64::from),
+            ..AssetMaterial::default()
+        };
         let mut hasher = DefaultHasher::new();
         canonical.hash(&mut hasher);
         mesh_index.hash(&mut hasher);
@@ -158,8 +193,10 @@ impl AssetStore {
             geometry_id: hasher.finish(),
             positions,
             indices,
+            normals,
             uvs,
             texture,
+            material,
         });
         self.decoded.insert(key, geometry.clone());
         Ok(geometry)
@@ -176,6 +213,35 @@ impl AssetStore {
         );
         Ok(canonical)
     }
+}
+
+fn generate_vertex_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let a = positions[triangle[0] as usize];
+        let b = positions[triangle[1] as usize];
+        let c = positions[triangle[2] as usize];
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let face = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for index in triangle {
+            let normal = &mut normals[*index as usize];
+            normal[0] += face[0];
+            normal[1] += face[1];
+            normal[2] += face[2];
+        }
+    }
+    for normal in &mut normals {
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2])
+            .sqrt()
+            .max(f32::EPSILON);
+        *normal = [normal[0] / length, normal[1] / length, normal[2] / length];
+    }
+    normals
 }
 
 fn image_to_rgba8(image: &gltf::image::Data) -> Option<Vec<u8>> {
@@ -322,10 +388,12 @@ mod tests {
         let geometry = store.load_geometry("public/scene.gltf", 0, 0).unwrap();
         assert_eq!(geometry.positions.len(), 3);
         assert_eq!(geometry.indices, [0, 1, 2]);
+        assert_eq!(geometry.normals.len(), 3);
         assert_eq!(geometry.uvs.len(), 3);
         let texture = geometry.texture.as_ref().unwrap();
         assert_eq!((texture.width, texture.height), (1, 1));
         assert_eq!(texture.rgba8.len(), 4);
+        assert_eq!(geometry.material.roughness, 1.0);
         assert!(store.load("../outside.bin").is_err());
         fs::remove_dir_all(root).unwrap();
     }

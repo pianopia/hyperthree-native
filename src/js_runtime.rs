@@ -1,6 +1,6 @@
 use crate::{
     asset::AssetStore,
-    bridge::{SharedInputState, SharedRenderState},
+    bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
 };
 use anyhow::{Context as _, Result};
 use boa_engine::{
@@ -58,7 +58,7 @@ impl JsRuntime {
         context
             .register_global_builtin_callable(
                 js_string!("__hyperthreeSetClearColor"),
-                4,
+                5,
                 // The closure captures only Arc<Mutex<...>> Rust state, never a
                 // GC-managed Boa value, so it does not need GC tracing.
                 unsafe {
@@ -270,12 +270,22 @@ impl JsRuntime {
                             .chunks_exact(2)
                             .map(|uv| [uv[0] as f32, uv[1] as f32])
                             .collect::<Vec<_>>();
+                        let normal_values = number_array_arg(args, 4, context)?;
+                        if normal_values.len() % 3 != 0 {
+                            return Err(JsNativeError::range()
+                                .with_message("normal attribute length must be divisible by 3")
+                                .into());
+                        }
+                        let normals = normal_values
+                            .chunks_exact(3)
+                            .map(|normal| [normal[0] as f32, normal[1] as f32, normal[2] as f32])
+                            .collect::<Vec<_>>();
                         geometry_state
                             .lock()
                             .map_err(|_| {
                                 JsNativeError::error().with_message("render state poisoned")
                             })?
-                            .register_geometry(geometry_id, positions, indices, uvs)
+                            .register_geometry(geometry_id, positions, indices, normals, uvs)
                             .map_err(|error| JsNativeError::range().with_message(error))?;
                         Ok(JsValue::undefined())
                     })
@@ -322,6 +332,215 @@ impl JsRuntime {
             })
             .map_err(|error| {
                 anyhow::anyhow!("failed to register geometry instance binding: {error}")
+            })?;
+
+        let material_geometry_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreePushGeometryMaterial"),
+                19,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let geometry_id = geometry_id_arg(args, 0, context)?;
+                        let position = [
+                            number_arg(args, 1, context)?,
+                            number_arg(args, 2, context)?,
+                            number_arg(args, 3, context)?,
+                        ];
+                        let scale = [
+                            number_arg(args, 4, context)?,
+                            number_arg(args, 5, context)?,
+                            number_arg(args, 6, context)?,
+                        ];
+                        let rotation_y = number_arg(args, 7, context)?;
+                        let base_color = [
+                            number_arg(args, 8, context)?,
+                            number_arg(args, 9, context)?,
+                            number_arg(args, 10, context)?,
+                            number_arg(args, 11, context)?,
+                        ];
+                        let texture_id = optional_texture_id_arg(args, 12, context)?;
+                        let metallic = number_arg(args, 13, context)?;
+                        let roughness = number_arg(args, 14, context)?;
+                        let emissive = [
+                            number_arg(args, 15, context)?,
+                            number_arg(args, 16, context)?,
+                            number_arg(args, 17, context)?,
+                        ];
+                        let unlit = number_arg(args, 18, context)? > 0.5;
+                        material_geometry_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .push_custom_mesh_with_material(
+                                geometry_id,
+                                position,
+                                scale,
+                                rotation_y,
+                                MaterialSnapshot {
+                                    base_color,
+                                    metallic,
+                                    roughness,
+                                    emissive,
+                                    unlit,
+                                    base_color_texture: texture_id,
+                                },
+                            );
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register material geometry binding: {error}")
+            })?;
+
+        let matrix_geometry_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreePushGeometryMatrixMaterial"),
+                13,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let geometry_id = geometry_id_arg(args, 0, context)?;
+                        let matrix_values = number_array_arg(args, 1, context)?;
+                        if matrix_values.len() != 16 {
+                            return Err(JsNativeError::range()
+                                .with_message("model matrix must contain 16 numbers")
+                                .into());
+                        }
+                        let mut model_matrix = [[0.0; 4]; 4];
+                        for column in 0..4 {
+                            for row in 0..4 {
+                                model_matrix[column][row] = matrix_values[column * 4 + row];
+                            }
+                        }
+                        let base_color = [
+                            number_arg(args, 2, context)?,
+                            number_arg(args, 3, context)?,
+                            number_arg(args, 4, context)?,
+                            number_arg(args, 5, context)?,
+                        ];
+                        let texture_id = optional_texture_id_arg(args, 6, context)?;
+                        let metallic = number_arg(args, 7, context)?;
+                        let roughness = number_arg(args, 8, context)?;
+                        let emissive = [
+                            number_arg(args, 9, context)?,
+                            number_arg(args, 10, context)?,
+                            number_arg(args, 11, context)?,
+                        ];
+                        let unlit = number_arg(args, 12, context)? > 0.5;
+                        matrix_geometry_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .push_custom_mesh_matrix_with_material(
+                                geometry_id,
+                                model_matrix,
+                                MaterialSnapshot {
+                                    base_color,
+                                    metallic,
+                                    roughness,
+                                    emissive,
+                                    unlit,
+                                    base_color_texture: texture_id,
+                                },
+                            );
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register matrix geometry binding: {error}")
+            })?;
+
+        let matrix_primitive_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreePushPrimitiveMatrixMaterial"),
+                13,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let geometry = primitive_kind_arg(args, 0, context)?;
+                        let matrix_values = number_array_arg(args, 1, context)?;
+                        if matrix_values.len() != 16 {
+                            return Err(JsNativeError::range()
+                                .with_message("model matrix must contain 16 numbers")
+                                .into());
+                        }
+                        let mut model_matrix = [[0.0; 4]; 4];
+                        for column in 0..4 {
+                            for row in 0..4 {
+                                model_matrix[column][row] = matrix_values[column * 4 + row];
+                            }
+                        }
+                        let material = MaterialSnapshot {
+                            base_color: [
+                                number_arg(args, 2, context)?,
+                                number_arg(args, 3, context)?,
+                                number_arg(args, 4, context)?,
+                                number_arg(args, 5, context)?,
+                            ],
+                            base_color_texture: optional_texture_id_arg(args, 6, context)?,
+                            metallic: number_arg(args, 7, context)?,
+                            roughness: number_arg(args, 8, context)?,
+                            emissive: [
+                                number_arg(args, 9, context)?,
+                                number_arg(args, 10, context)?,
+                                number_arg(args, 11, context)?,
+                            ],
+                            unlit: number_arg(args, 12, context)? > 0.5,
+                        };
+                        matrix_primitive_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .push_primitive_matrix_with_material(geometry, model_matrix, material);
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register primitive matrix binding: {error}")
+            })?;
+
+        let light_state = render_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeSetDirectionalLight"),
+                10,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let direction = [
+                            number_arg(args, 0, context)?,
+                            number_arg(args, 1, context)?,
+                            number_arg(args, 2, context)?,
+                        ];
+                        let color = [
+                            number_arg(args, 3, context)?,
+                            number_arg(args, 4, context)?,
+                            number_arg(args, 5, context)?,
+                        ];
+                        let intensity = number_arg(args, 6, context)?;
+                        let ambient = [
+                            number_arg(args, 7, context)?,
+                            number_arg(args, 8, context)?,
+                            number_arg(args, 9, context)?,
+                        ];
+                        light_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("render state poisoned")
+                            })?
+                            .set_directional_light(direction, color, intensity, ambient);
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register directional-light binding: {error}")
             })?;
 
         let camera_state = render_state.clone();
@@ -547,6 +766,7 @@ impl JsRuntime {
                             geometry.geometry_id,
                             geometry.positions.clone(),
                             geometry.indices.clone(),
+                            geometry.normals.clone(),
                             geometry.uvs.clone(),
                         )
                         .map_err(|error| JsNativeError::range().with_message(error))?;
@@ -563,13 +783,24 @@ impl JsRuntime {
                     } else {
                         None
                     };
-                    state.push_custom_mesh_with_texture(
+                    state.push_custom_mesh_with_material(
                         geometry.geometry_id,
-                        texture_id,
                         position,
                         scale,
                         rotation_y,
-                        color,
+                        MaterialSnapshot {
+                            base_color: [
+                                color[0] * geometry.material.base_color[0],
+                                color[1] * geometry.material.base_color[1],
+                                color[2] * geometry.material.base_color[2],
+                                color[3] * geometry.material.base_color[3],
+                            ],
+                            metallic: geometry.material.metallic,
+                            roughness: geometry.material.roughness,
+                            emissive: geometry.material.emissive,
+                            unlit: geometry.material.unlit,
+                            base_color_texture: texture_id,
+                        },
                     );
                     Ok(JsValue::undefined())
                 })
@@ -873,6 +1104,27 @@ fn geometry_id_arg(args: &[JsValue], index: usize, context: &mut Context) -> JsR
     Ok(value as u64)
 }
 
+fn primitive_kind_arg(
+    args: &[JsValue],
+    index: usize,
+    context: &mut Context,
+) -> JsResult<GeometryKind> {
+    let value = number_arg(args, index, context)?;
+    if value.fract() != 0.0 {
+        return Err(JsNativeError::range()
+            .with_message("primitive kind must be an integer")
+            .into());
+    }
+    match value as i32 {
+        0 => Ok(GeometryKind::Cube),
+        1 => Ok(GeometryKind::Plane),
+        2 => Ok(GeometryKind::Sphere),
+        _ => Err(JsNativeError::range()
+            .with_message("unknown native primitive kind")
+            .into()),
+    }
+}
+
 fn optional_texture_id_arg(
     args: &[JsValue],
     index: usize,
@@ -1065,6 +1317,7 @@ mod tests {
         assert_eq!(snapshot.cubes.len(), 1);
         assert_eq!(snapshot.cubes[0].position, [1.0, 2.0, 3.0]);
         assert_eq!(snapshot.cubes[0].scale, [2.0, 3.0, 4.0]);
+        assert_eq!(snapshot.cubes[0].model_matrix.unwrap()[0][0], 2.0);
         assert_eq!(snapshot.camera.target, [0.0, 0.0, 3.0]);
     }
 
@@ -1175,7 +1428,14 @@ mod tests {
                       position: { x: 1, y: 2, z: 3 },
                       scale: { x: 1, y: 1, z: 1 },
                       rotation: { y: 0 },
-                      material: { color: { r: 0.4, g: 0.5, b: 0.6 }, opacity: 1 },
+                      material: {
+                        color: { r: 0.4, g: 0.5, b: 0.6 },
+                        opacity: 1,
+                        isMeshStandardMaterial: true,
+                        metalness: 0.8,
+                        roughness: 0.2,
+                        emissive: { r: 0.03, g: 0.02, b: 0.01 },
+                      },
                     });
                   },
                 };
@@ -1190,6 +1450,12 @@ mod tests {
         assert_eq!(snapshot.custom_meshes.len(), 1);
         assert_eq!(snapshot.custom_meshes[0].geometry_id, 42);
         assert_eq!(snapshot.custom_meshes[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(snapshot.custom_meshes[0].material.metallic, 0.8);
+        assert_eq!(snapshot.custom_meshes[0].material.roughness, 0.2);
+        assert_eq!(
+            snapshot.custom_meshes[0].material.emissive,
+            [0.03, 0.02, 0.01]
+        );
         let registry = snapshot.geometry_registry.lock().unwrap();
         let geometry = registry.get(42).unwrap();
         assert_eq!(geometry.positions.len(), 3);

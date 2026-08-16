@@ -16,7 +16,52 @@ pub struct CubeSnapshot {
     pub position: [f64; 3],
     pub scale: [f64; 3],
     pub rotation_y: f64,
+    #[allow(dead_code)]
     pub color: [f64; 4],
+    pub material: MaterialSnapshot,
+    pub model_matrix: Option<[[f64; 4]; 4]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MaterialSnapshot {
+    pub base_color: [f64; 4],
+    pub metallic: f64,
+    pub roughness: f64,
+    pub emissive: [f64; 3],
+    pub unlit: bool,
+    pub base_color_texture: Option<u64>,
+}
+
+impl Default for MaterialSnapshot {
+    fn default() -> Self {
+        Self {
+            base_color: [0.1, 0.8, 0.95, 1.0],
+            metallic: 0.0,
+            roughness: 0.65,
+            emissive: [0.0, 0.0, 0.0],
+            unlit: false,
+            base_color_texture: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DirectionalLightSnapshot {
+    pub direction: [f64; 3],
+    pub color: [f64; 3],
+    pub intensity: f64,
+    pub ambient: [f64; 3],
+}
+
+impl Default for DirectionalLightSnapshot {
+    fn default() -> Self {
+        Self {
+            direction: [-0.35, -0.8, -0.45],
+            color: [1.0, 0.95, 0.85],
+            intensity: 2.5,
+            ambient: [0.08, 0.1, 0.14],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -26,13 +71,17 @@ pub struct CustomMeshSnapshot {
     pub position: [f64; 3],
     pub scale: [f64; 3],
     pub rotation_y: f64,
+    #[allow(dead_code)]
     pub color: [f64; 4],
+    pub material: MaterialSnapshot,
+    pub model_matrix: Option<[[f64; 4]; 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeometryData {
     pub positions: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
 }
 
@@ -60,6 +109,7 @@ impl GeometryRegistry {
         geometry_id: u64,
         positions: Vec<[f32; 3]>,
         indices: Vec<u32>,
+        normals: Vec<[f32; 3]>,
         uvs: Vec<[f32; 2]>,
     ) -> Result<(), String> {
         if positions.len() < 3 {
@@ -77,9 +127,18 @@ impl GeometryRegistry {
         if !uvs.is_empty() && uvs.len() != positions.len() {
             return Err("BufferGeometry UV count must match the position count".to_string());
         }
+        if !normals.is_empty() && normals.len() != positions.len() {
+            return Err("BufferGeometry normal count must match the position count".to_string());
+        }
+        let normals = if normals.is_empty() {
+            generate_vertex_normals(&positions, &indices)
+        } else {
+            normals
+        };
         let geometry = GeometryData {
             positions,
             indices,
+            normals,
             uvs,
         };
         if self
@@ -96,6 +155,35 @@ impl GeometryRegistry {
     pub fn get(&self, geometry_id: u64) -> Option<Arc<GeometryData>> {
         self.geometries.get(&geometry_id).cloned()
     }
+}
+
+fn generate_vertex_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let a = positions[triangle[0] as usize];
+        let b = positions[triangle[1] as usize];
+        let c = positions[triangle[2] as usize];
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let face = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for index in triangle {
+            let normal = &mut normals[*index as usize];
+            normal[0] += face[0];
+            normal[1] += face[1];
+            normal[2] += face[2];
+        }
+    }
+    for normal in &mut normals {
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2])
+            .sqrt()
+            .max(f32::EPSILON);
+        *normal = [normal[0] / length, normal[1] / length, normal[2] / length];
+    }
+    normals
 }
 
 #[derive(Debug, Default)]
@@ -173,6 +261,7 @@ pub struct NativeRenderSnapshot {
     pub camera: CameraSnapshot,
     pub geometry_registry: SharedGeometryRegistry,
     pub texture_registry: SharedTextureRegistry,
+    pub directional_light: DirectionalLightSnapshot,
 }
 
 #[derive(Debug)]
@@ -183,6 +272,7 @@ pub struct NativeRenderState {
     camera: CameraSnapshot,
     geometry_registry: SharedGeometryRegistry,
     texture_registry: SharedTextureRegistry,
+    directional_light: DirectionalLightSnapshot,
 }
 
 pub type SharedRenderState = Arc<Mutex<NativeRenderState>>;
@@ -250,6 +340,8 @@ impl Default for NativeRenderState {
                 scale: [1.0, 1.0, 1.0],
                 rotation_y: 0.0,
                 color: [0.1, 0.8, 0.95, 1.0],
+                material: MaterialSnapshot::default(),
+                model_matrix: None,
             }],
             custom_meshes: Vec::new(),
             camera: CameraSnapshot {
@@ -262,6 +354,7 @@ impl Default for NativeRenderState {
             },
             geometry_registry: GeometryRegistry::shared(),
             texture_registry: TextureRegistry::shared(),
+            directional_light: DirectionalLightSnapshot::default(),
         }
     }
 }
@@ -279,6 +372,7 @@ impl NativeRenderState {
             camera: self.camera,
             geometry_registry: self.geometry_registry.clone(),
             texture_registry: self.texture_registry.clone(),
+            directional_light: self.directional_light,
         }
     }
 
@@ -299,6 +393,11 @@ impl NativeRenderState {
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
+            material: MaterialSnapshot {
+                base_color: color.map(|component| component.clamp(0.0, 1.0)),
+                ..MaterialSnapshot::default()
+            },
+            model_matrix: None,
         };
         if let Some(first) = self.cubes.first_mut() {
             *first = cube;
@@ -320,6 +419,11 @@ impl NativeRenderState {
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
+            material: MaterialSnapshot {
+                base_color: color.map(|component| component.clamp(0.0, 1.0)),
+                ..MaterialSnapshot::default()
+            },
+            model_matrix: None,
         });
     }
 
@@ -336,6 +440,11 @@ impl NativeRenderState {
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
+            material: MaterialSnapshot {
+                base_color: color.map(|component| component.clamp(0.0, 1.0)),
+                ..MaterialSnapshot::default()
+            },
+            model_matrix: None,
         });
     }
 
@@ -352,6 +461,11 @@ impl NativeRenderState {
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
+            material: MaterialSnapshot {
+                base_color: color.map(|component| component.clamp(0.0, 1.0)),
+                ..MaterialSnapshot::default()
+            },
+            model_matrix: None,
         });
     }
 
@@ -360,17 +474,39 @@ impl NativeRenderState {
         self.custom_meshes.clear();
     }
 
+    pub fn push_primitive_matrix_with_material(
+        &mut self,
+        geometry: GeometryKind,
+        model_matrix: [[f64; 4]; 4],
+        material: MaterialSnapshot,
+    ) {
+        self.cubes.push(CubeSnapshot {
+            geometry,
+            position: [model_matrix[3][0], model_matrix[3][1], model_matrix[3][2]],
+            scale: [
+                column_length(model_matrix, 0),
+                column_length(model_matrix, 1),
+                column_length(model_matrix, 2),
+            ],
+            rotation_y: 0.0,
+            color: material.base_color,
+            material,
+            model_matrix: Some(model_matrix),
+        });
+    }
+
     pub fn register_geometry(
         &mut self,
         geometry_id: u64,
         positions: Vec<[f32; 3]>,
         indices: Vec<u32>,
+        normals: Vec<[f32; 3]>,
         uvs: Vec<[f32; 2]>,
     ) -> Result<(), String> {
         self.geometry_registry
             .lock()
             .map_err(|_| "geometry registry poisoned".to_string())?
-            .register(geometry_id, positions, indices, uvs)
+            .register(geometry_id, positions, indices, normals, uvs)
     }
 
     pub fn register_texture(
@@ -402,7 +538,70 @@ impl NativeRenderState {
             scale: scale.map(|value| value.max(0.001)),
             rotation_y,
             color: color.map(|component| component.clamp(0.0, 1.0)),
+            material: MaterialSnapshot {
+                base_color: color.map(|component| component.clamp(0.0, 1.0)),
+                base_color_texture: texture_id,
+                ..MaterialSnapshot::default()
+            },
+            model_matrix: None,
         });
+    }
+
+    pub fn push_custom_mesh_with_material(
+        &mut self,
+        geometry_id: u64,
+        position: [f64; 3],
+        scale: [f64; 3],
+        rotation_y: f64,
+        material: MaterialSnapshot,
+    ) {
+        self.custom_meshes.push(CustomMeshSnapshot {
+            geometry_id,
+            texture_id: material.base_color_texture,
+            position,
+            scale: scale.map(|value| value.max(0.001)),
+            rotation_y,
+            color: material
+                .base_color
+                .map(|component| component.clamp(0.0, 1.0)),
+            material,
+            model_matrix: None,
+        });
+    }
+
+    pub fn push_custom_mesh_matrix_with_material(
+        &mut self,
+        geometry_id: u64,
+        model_matrix: [[f64; 4]; 4],
+        material: MaterialSnapshot,
+    ) {
+        self.custom_meshes.push(CustomMeshSnapshot {
+            geometry_id,
+            texture_id: material.base_color_texture,
+            position: [model_matrix[3][0], model_matrix[3][1], model_matrix[3][2]],
+            scale: [1.0, 1.0, 1.0],
+            rotation_y: 0.0,
+            color: material
+                .base_color
+                .map(|component| component.clamp(0.0, 1.0)),
+            material,
+            model_matrix: Some(model_matrix),
+        });
+    }
+
+    pub fn set_directional_light(
+        &mut self,
+        direction: [f64; 3],
+        color: [f64; 3],
+        intensity: f64,
+        ambient: [f64; 3],
+    ) {
+        self.directional_light = DirectionalLightSnapshot {
+            direction,
+            color: color.map(|component| component.clamp(0.0, 1.0)),
+            intensity: intensity.max(0.0),
+            ambient: ambient.map(|component| component.clamp(0.0, 1.0)),
+        };
     }
 
     pub fn set_camera(
@@ -454,6 +653,14 @@ impl NativeRenderState {
     }
 }
 
+fn column_length(matrix: [[f64; 4]; 4], column: usize) -> f64 {
+    (matrix[column][0] * matrix[column][0]
+        + matrix[column][1] * matrix[column][1]
+        + matrix[column][2] * matrix[column][2])
+        .sqrt()
+        .max(0.001)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{NativeInputState, NativeRenderState};
@@ -496,6 +703,7 @@ mod tests {
                 7,
                 vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 vec![0, 1, 2],
+                Vec::new(),
                 vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
             )
             .unwrap();

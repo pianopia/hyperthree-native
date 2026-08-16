@@ -57,11 +57,50 @@ globalThis.HyperThreeNative = {
       options.a ?? 1,
     );
   },
-  registerGeometry(id, positions, indices = [], uvs = []) {
-    __hyperthreeRegisterGeometry(id, positions, indices, uvs);
+  registerGeometry(id, positions, indices = [], uvs = [], normals = []) {
+    __hyperthreeRegisterGeometry(id, positions, indices, uvs, normals);
   },
   pushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a = 1, textureId = -1) {
     __hyperthreePushGeometry(id, x, y, z, sx, sy, sz, rotationY, r, g, b, a, textureId);
+  },
+  pushGeometryMaterial(
+    id, x, y, z, sx, sy, sz, rotationY,
+    r, g, b, a = 1, textureId = -1,
+    metallic = 0, roughness = 0.65,
+    emissiveR = 0, emissiveG = 0, emissiveB = 0, unlit = false,
+  ) {
+    __hyperthreePushGeometryMaterial(
+      id, x, y, z, sx, sy, sz, rotationY,
+      r, g, b, a, textureId, metallic, roughness,
+      emissiveR, emissiveG, emissiveB, unlit ? 1 : 0,
+    );
+  },
+  pushGeometryMatrixMaterial(
+    id, matrix, r, g, b, a = 1, textureId = -1,
+    metallic = 0, roughness = 0.65,
+    emissiveR = 0, emissiveG = 0, emissiveB = 0, unlit = false,
+  ) {
+    __hyperthreePushGeometryMatrixMaterial(
+      id, matrix, r, g, b, a, textureId, metallic, roughness,
+      emissiveR, emissiveG, emissiveB, unlit ? 1 : 0,
+    );
+  },
+  pushPrimitiveMatrixMaterial(
+    kind, matrix, r, g, b, a = 1, textureId = -1,
+    metallic = 0, roughness = 0.65,
+    emissiveR = 0, emissiveG = 0, emissiveB = 0, unlit = false,
+  ) {
+    __hyperthreePushPrimitiveMatrixMaterial(
+      kind, matrix, r, g, b, a, textureId, metallic, roughness,
+      emissiveR, emissiveG, emissiveB, unlit ? 1 : 0,
+    );
+  },
+  setDirectionalLight(direction, color, intensity = 2.5, ambient = { r: 0.08, g: 0.1, b: 0.14 }) {
+    __hyperthreeSetDirectionalLight(
+      direction.x, direction.y, direction.z,
+      color.r, color.g, color.b,
+      intensity, ambient.r, ambient.g, ambient.b,
+    );
   },
   syncThreeScene(scene, camera, options = {}) {
     const maxObjects = options.maxObjects ?? 4096;
@@ -119,7 +158,20 @@ globalThis.HyperThreeNative = {
     HyperThreeNative.beginFrame();
     if (scene && typeof scene.traverse === "function") {
       scene.traverse((object) => {
-        if (renderedObjects >= maxObjects || !object.visible || !object.isMesh) {
+        if (!object.visible) {
+          return;
+        }
+        if (object.isDirectionalLight) {
+          const lightPosition = object.position || { x: -0.35, y: -0.8, z: -0.45 };
+          const lightColor = object.color || { r: 1, g: 1, b: 1 };
+          HyperThreeNative.setDirectionalLight(
+            { x: lightPosition.x, y: lightPosition.y, z: lightPosition.z },
+            { r: lightColor.r ?? 1, g: lightColor.g ?? 1, b: lightColor.b ?? 1 },
+            object.intensity ?? 2.5,
+          );
+          return;
+        }
+        if (renderedObjects >= maxObjects || !object.isMesh) {
           return;
         }
         const geometryType = object.geometry?.type;
@@ -142,6 +194,30 @@ globalThis.HyperThreeNative = {
           : [object.position?.x ?? 0, object.position?.y ?? 0, object.position?.z ?? 0];
         const scale = object.scale || { x: 1, y: 1, z: 1 };
         const rotationY = object.rotation?.y ?? 0;
+        const modelMatrix = elements
+          ? Array.from(elements)
+          : [
+            scale.x, 0, 0, 0, 0, scale.y, 0, 0, 0, 0, scale.z, 0,
+            position[0], position[1], position[2], 1,
+          ];
+        if (elements) {
+          const matrixScale = [
+            Math.hypot(modelMatrix[0], modelMatrix[1], modelMatrix[2]),
+            Math.hypot(modelMatrix[4], modelMatrix[5], modelMatrix[6]),
+            Math.hypot(modelMatrix[8], modelMatrix[9], modelMatrix[10]),
+          ];
+          if (matrixScale.every((value) => Math.abs(value - 1) < 1e-5)) {
+            modelMatrix[0] *= scale.x;
+            modelMatrix[1] *= scale.x;
+            modelMatrix[2] *= scale.x;
+            modelMatrix[4] *= scale.y;
+            modelMatrix[5] *= scale.y;
+            modelMatrix[6] *= scale.y;
+            modelMatrix[8] *= scale.z;
+            modelMatrix[9] *= scale.z;
+            modelMatrix[10] *= scale.z;
+          }
+        }
         const material = Array.isArray(object.material)
           ? object.material[0]
           : object.material;
@@ -154,44 +230,43 @@ globalThis.HyperThreeNative = {
               positionAttribute.array,
               object.geometry.index?.array ?? [],
               object.geometry.attributes.uv?.array ?? [],
+              object.geometry.attributes.normal?.array ?? [],
             );
             hyperthreeRegisteredGeometryIds.add(customGeometryId);
           }
-          HyperThreeNative.pushGeometry(
+          const isStandard = material?.isMeshStandardMaterial || material?.isMeshPhysicalMaterial;
+          HyperThreeNative.pushGeometryMatrixMaterial(
             customGeometryId,
-            position[0],
-            position[1],
-            position[2],
-            scale.x,
-            scale.y,
-            scale.z,
-            rotationY,
+            modelMatrix,
             color.r ?? 0.1,
             color.g ?? 0.8,
             color.b ?? 0.95,
             alpha,
             material?.userData?.hyperthreeTextureId ?? -1,
+            material?.metalness ?? 0,
+            material?.roughness ?? 0.65,
+            material?.emissive?.r ?? 0,
+            material?.emissive?.g ?? 0,
+            material?.emissive?.b ?? 0,
+            !isStandard && !!material?.isMeshBasicMaterial,
           );
         } else {
-          const push = isPlane
-            ? HyperThreeNative.pushPlane
-            : isSphere
-              ? HyperThreeNative.pushSphere
-              : HyperThreeNative.pushCube;
-          push.call(
-            HyperThreeNative,
-            position[0],
-            position[1],
-            position[2],
-            scale.x,
-            scale.y,
-            scale.z,
-            rotationY,
+          const primitiveKind = isPlane ? 1 : isSphere ? 2 : 0;
+          const isStandard = material?.isMeshStandardMaterial || material?.isMeshPhysicalMaterial;
+          HyperThreeNative.pushPrimitiveMatrixMaterial(
+            primitiveKind,
+            modelMatrix,
             color.r ?? 0.1,
             color.g ?? 0.8,
             color.b ?? 0.95,
             alpha,
-            0,
+            material?.userData?.hyperthreeTextureId ?? -1,
+            material?.metalness ?? 0,
+            material?.roughness ?? 0.65,
+            material?.emissive?.r ?? 0,
+            material?.emissive?.g ?? 0,
+            material?.emissive?.b ?? 0,
+            !isStandard && !!material?.isMeshBasicMaterial,
           );
         }
         renderedObjects += 1;
