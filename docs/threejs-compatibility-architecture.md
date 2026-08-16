@@ -50,7 +50,9 @@ render/compute passを同じ意味で提供する必要がある。
 簡略化から、アニメーション変換を失わない汎用描画契約へ移行する最初の縦切り
 になっている。winitのキーボード、マウス、pointer、wheel、touchイベントは
 ブラウザ互換の`window`/canvasイベントへ変換し、Three.js Controlsを標準の
-イベント購読で動かせる境界も追加している。
+イベント購読で動かせる境界も追加している。`requestPointerLock()`、
+`document.exitPointerLock()`、`document.pointerLockElement`もwinitのcursor grabと
+ネイティブカーソル可視性へ接続し、`pointerlockchange`を配送する。
 
 ## 実装フェーズ
 

@@ -24,7 +24,7 @@ use winit::{
     event::{Event, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::{ModifiersState, PhysicalKey},
-    window::WindowBuilder,
+    window::{CursorGrabMode, WindowBuilder},
 };
 
 #[derive(Debug, Parser)]
@@ -508,6 +508,13 @@ fn run_native(
                 }
             }
             Event::AboutToWait => {
+                if let Some(lock) = input_state
+                    .lock()
+                    .expect("input state mutex should not be poisoned")
+                    .take_pointer_lock_request()
+                {
+                    apply_pointer_lock_request(&mut host, lock);
+                }
                 let now = Instant::now();
                 let delta_seconds = now.duration_since(last_frame).as_secs_f64().clamp(0.0, 0.1);
                 last_frame = now;
@@ -541,6 +548,34 @@ fn dispatch_input_event(host: &mut GameHost, event_type: &str, init: serde_json:
     if let Err(error) = host.runtime_mut().dispatch_input_event(event_type, &init) {
         log::error!("JavaScript {event_type} event failed: {error:#}");
     }
+}
+
+fn apply_pointer_lock_request(host: &mut GameHost, lock: bool) {
+    let window = host.renderer().window.clone();
+    let locked = if lock {
+        let result = window
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+        if let Err(error) = result {
+            log::warn!("native pointer lock request failed: {error}");
+            false
+        } else {
+            window.set_cursor_visible(false);
+            true
+        }
+    } else {
+        let result = window.set_cursor_grab(CursorGrabMode::None);
+        if let Err(error) = result {
+            log::debug!("native pointer unlock request failed: {error}");
+        }
+        window.set_cursor_visible(true);
+        false
+    };
+    host.input_state
+        .lock()
+        .expect("input state mutex should not be poisoned")
+        .set_pointer_locked(locked);
+    dispatch_input_event(host, "pointerlockchange", json!({}));
 }
 
 fn mouse_button_id(button: MouseButton) -> Option<u8> {

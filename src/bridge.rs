@@ -292,6 +292,8 @@ pub struct NativeInputState {
     pressed_keys: HashSet<String>,
     mouse_buttons: HashSet<u8>,
     mouse_position: [f64; 2],
+    pointer_lock_request: Option<bool>,
+    pointer_locked: bool,
 }
 
 pub type SharedInputState = Arc<Mutex<NativeInputState>>;
@@ -317,6 +319,29 @@ impl NativeInputState {
     pub fn clear(&mut self) {
         self.pressed_keys.clear();
         self.mouse_buttons.clear();
+        if self.pointer_locked {
+            self.pointer_lock_request = Some(false);
+        }
+    }
+
+    pub fn request_pointer_lock(&mut self) {
+        self.pointer_lock_request = Some(true);
+    }
+
+    pub fn request_pointer_unlock(&mut self) {
+        self.pointer_lock_request = Some(false);
+    }
+
+    pub fn take_pointer_lock_request(&mut self) -> Option<bool> {
+        self.pointer_lock_request.take()
+    }
+
+    pub fn set_pointer_locked(&mut self, locked: bool) {
+        self.pointer_locked = locked;
+    }
+
+    pub fn pointer_locked(&self) -> bool {
+        self.pointer_locked
     }
 
     pub fn set_mouse_button(&mut self, button: u8, pressed: bool) {

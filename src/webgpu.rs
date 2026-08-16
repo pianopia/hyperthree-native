@@ -4311,6 +4311,9 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     getContext(type) { return type === 'webgpu' ? canvasContext : null; },
     addEventListener(type, listener) { globalThis.addEventListener(type, listener); },
     removeEventListener(type, listener) { globalThis.removeEventListener(type, listener); },
+    requestPointerLock() { __hyperthreeRequestPointerLock(); },
+    setPointerCapture() {},
+    releasePointerCapture() {},
     setAttribute() {},
     getAttribute() { return null; },
   };
@@ -4335,6 +4338,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     createElementNS(_namespace, name) { return this.createElement(name); },
     body: { appendChild() {}, removeChild() {} },
   };
+  globalThis.document.exitPointerLock = () => { __hyperthreeExitPointerLock(); };
+  Object.defineProperty(globalThis.document, 'pointerLockElement', {
+    configurable: true,
+    get: () => __hyperthreeIsPointerLocked() ? nativeCanvas : null,
+  });
   const normalizeBindGroupEntry = entry => {
     const resource = entry.resource;
     let normalizedResource;

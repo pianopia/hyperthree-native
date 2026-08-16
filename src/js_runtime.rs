@@ -704,6 +704,69 @@ impl JsRuntime {
             )
             .map_err(|error| anyhow::anyhow!("failed to register mouse button binding: {error}"))?;
 
+        let request_pointer_lock_state = input_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeRequestPointerLock"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, _context| {
+                        request_pointer_lock_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .request_pointer_lock();
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register pointer lock request binding: {error}")
+            })?;
+
+        let exit_pointer_lock_state = input_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeExitPointerLock"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, _context| {
+                        exit_pointer_lock_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .request_pointer_unlock();
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register pointer lock exit binding: {error}")
+            })?;
+
+        let pointer_lock_state = input_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeIsPointerLocked"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, _context| {
+                        let locked = pointer_lock_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .pointer_locked();
+                        Ok(JsValue::from(locked))
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register pointer lock state binding: {error}")
+            })?;
+
         let mouse_position_input_state = input_state;
         context
             .register_global_builtin_callable(
@@ -3865,7 +3928,7 @@ mod tests {
         let render_state = NativeRenderState::shared();
         let input_state = NativeInputState::shared();
         let root = std::env::current_dir().unwrap();
-        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state.clone(), root).unwrap();
         runtime
             .execute_source(
                 r#"
@@ -3892,6 +3955,20 @@ mod tests {
                 "if (JSON.stringify(globalThis.__inputEventSmoke) !== '[32,48,\"mouse\",1]') throw new Error('input event payload mismatch');",
             )
             .unwrap();
+        runtime
+            .execute_source("__hyperthreeRequestPointerLock();")
+            .unwrap();
+        assert_eq!(
+            input_state.lock().unwrap().take_pointer_lock_request(),
+            Some(true)
+        );
+        runtime
+            .execute_source("__hyperthreeExitPointerLock();")
+            .unwrap();
+        assert_eq!(
+            input_state.lock().unwrap().take_pointer_lock_request(),
+            Some(false)
+        );
     }
 
     #[test]
