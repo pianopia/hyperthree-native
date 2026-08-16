@@ -49,7 +49,7 @@
 - [x] WebGPU render bundle encoder/finish/executeBundles path and Three.js mip/render-bundle smoke
 - [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
 - [x] WebGPU device/adapter limits exposure and queue onSubmittedWorkDone synchronization
-- [x] WebGPU requestAdapter/requestDevice options, required-feature validation, and adapter info boundary
+- [x] WebGPU requestAdapter/requestDevice options, required-feature validation, adapter info boundary, and unsupported-feature fixture assertion
 - [x] WebGPU storage-buffer ComputePass dispatch and MAP_READ readback fixture
 - [x] WebGPU standard r/rg/rgba, HDR packed, depth/stencil texture format mapping and optional feature negotiation
 - [x] WebGPU GPUBuffer/GPUTexture descriptor properties exposed to JavaScript and fixture-verified

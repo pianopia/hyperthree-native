@@ -119,7 +119,14 @@ globalThis.__gltfSmokeStage = "before-adapter";
 navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfSmokeStage = "after-adapter";
   const device = await adapter.requestDevice();
+  let rejectedUnsupportedFeature = false;
+  try {
+    await adapter.requestDevice({ requiredFeatures: ["hyperthree-feature-that-does-not-exist"] });
+  } catch (_error) {
+    rejectedUnsupportedFeature = true;
+  }
   globalThis.__gltfDeviceLimitsSmoke = adapter.limits.maxTextureDimension2D > 0 &&
+    rejectedUnsupportedFeature &&
     device.limits.maxComputeWorkgroupsPerDimension > 0;
   const sourceBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const readbackBuffer = device.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
