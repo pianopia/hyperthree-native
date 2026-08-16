@@ -134,6 +134,7 @@ globalThis.__gltfEnvironmentSmoke = false;
 globalThis.__gltfPhysicalPbrSmoke = false;
 globalThis.__gltfMorphSmoke = false;
 globalThis.__gltfPostProcessingSmoke = false;
+globalThis.__gltfRendererReadbackSmoke = false;
 globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
@@ -624,6 +625,14 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   await renderer.renderAsync(scene, camera);
   renderer.setRenderTarget(null);
   globalThis.__gltfMrtSmoke = mrt.isRenderTarget === true && mrt.texture.length === 2;
+  const rendererReadbackTarget = new THREE.RenderTarget(32, 32, { depthBuffer: true });
+  renderer.setRenderTarget(rendererReadbackTarget);
+  await renderer.renderAsync(scene, camera);
+  const rendererPixels = await renderer.readRenderTargetPixelsAsync(rendererReadbackTarget, 0, 0, 32, 32);
+  globalThis.__gltfRendererReadbackSmoke = rendererPixels.byteLength >= 32 * 32 * 4 &&
+    rendererPixels.some((value, index) => index % 4 !== 3 && value > 0);
+  renderer.setRenderTarget(null);
+  rendererReadbackTarget.dispose();
   await renderer.renderAsync(scene, camera);
   const postProcessing = new PostProcessing(renderer);
   const scenePass = pass(scene, camera);
@@ -652,6 +661,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
+      !globalThis.__gltfRendererReadbackSmoke ||
       !globalThis.__gltfPhysicalPbrSmoke ||
       !globalThis.__gltfMorphSmoke ||
       !globalThis.__gltfPostProcessingSmoke ||

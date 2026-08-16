@@ -87,7 +87,8 @@ AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである
 外部PNG、canvas resizeを同じfixtureで検証済みである。Three.js 0.179の
 `MeshStandardNodeMaterial`/`MeshPhysicalNodeMaterial`（normal map、clearcoat、transmission）、TSL `colorNode`、
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
-実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
+実シーンをスモーク済みである。さらにRendererのRenderTargetをGPU readbackし、非空のPBR/effect
+画素が返ることまでfixtureで確認している。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
 shadow、equirectangular environment、MRT、indirect drawとそのGPU readbackも同じfixtureで
 スモーク済みである。`GPURenderBundleEncoder`の記録・finish・`executeBundles()`、
 `GPUQuerySet`のocclusion query、`beginOcclusionQuery()`/

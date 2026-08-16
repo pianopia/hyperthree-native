@@ -43,6 +43,7 @@
 - [x] Three.js 0.179 GLTFLoader embedded-buffer SkinnedMesh/Skeleton/AnimationMixer/WebGPU fixture
 - [x] Three.js 0.179 GLTFLoader GLB, external-buffer, external-PNG texture, and canvas-resize fixture
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture
+- [x] Three.js WebGPURenderer PBR/effect render-target pixel readback fixture
 - [x] WebGPU `GPUBuffer` copy/submit/`mapAsync(READ)` readback fixture
 - [x] WebGPU GPUQuerySet occlusion queries, pass begin/end, resolveQuerySet, and readback fixture
 - [x] WebGPU timestamp-query feature negotiation, inside-pass writes, resolve, and conditional native readback fixture
