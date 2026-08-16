@@ -2563,11 +2563,77 @@ fn native_error(error: String) -> boa_engine::JsError {
 }
 
 fn sanitize_wgsl(source: &str) -> String {
-    source
+    let source = source
         .lines()
         .filter(|line| !line.trim_start().starts_with("diagnostic("))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    normalize_texture_load_levels(&source)
+}
+
+fn normalize_texture_load_levels(source: &str) -> String {
+    const FUNCTION: &str = "textureLoad(";
+    let mut normalized = String::with_capacity(source.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = source[cursor..].find(FUNCTION) {
+        let start = cursor + relative_start;
+        normalized.push_str(&source[cursor..start]);
+        let open = start + FUNCTION.len() - 1;
+        let Some(end) = matching_parenthesis(source, open) else {
+            normalized.push_str(&source[start..]);
+            return normalized;
+        };
+        normalized.push_str(&normalize_texture_load_call(&source[start..=end]));
+        cursor = end + 1;
+    }
+    normalized.push_str(&source[cursor..]);
+    normalized
+}
+
+fn matching_parenthesis(source: &str, open: usize) -> Option<usize> {
+    let mut depth = 0;
+    for (index, character) in source.char_indices().skip_while(|(index, _)| *index < open) {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_texture_load_call(call: &str) -> String {
+    let open = call.find('(').unwrap_or(0);
+    let close = call.len().saturating_sub(1);
+    let mut depth = 0;
+    let mut last_top_level_comma = None;
+    for (index, character) in call.char_indices().skip_while(|(index, _)| *index <= open) {
+        match character {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => last_top_level_comma = Some(index),
+            _ => {}
+        }
+    }
+    let Some(comma) = last_top_level_comma else {
+        return call.to_string();
+    };
+    let suffix = &call[comma + 1..close];
+    let trimmed = suffix.trim_start();
+    let Some(level) = trimmed.strip_prefix("u32(") else {
+        return call.to_string();
+    };
+    let level = level.trim();
+    let level = level.strip_suffix(')').unwrap_or(level).trim();
+    let level = level.strip_suffix('u').unwrap_or(level).trim();
+    let indentation = &suffix[..suffix.len() - trimmed.len()];
+    let replacement = format!("{indentation}i32({level})");
+    format!("{}{}{}", &call[..comma + 1], replacement, &call[close..])
 }
 
 fn buffer_usage(bits: u64) -> wgpu::BufferUsages {
@@ -2979,6 +3045,16 @@ mod tests {
         assert_eq!(
             sanitize_wgsl(source),
             "@compute @workgroup_size(1) fn main() {}"
+        );
+    }
+
+    #[test]
+    fn normalizes_three_texture_array_load_level() {
+        let source = "nodeVar = textureLoad( texture, coord, layer, u32( 2u ) );";
+
+        assert_eq!(
+            sanitize_wgsl(source),
+            "nodeVar = textureLoad( texture, coord, layer, i32(2));"
         );
     }
 }

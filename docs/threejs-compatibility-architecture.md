@@ -67,8 +67,11 @@ Pipeline、CommandEncoder、RenderPass、ComputePassのnative実行sliceを実�
 swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが一時的に生成する
 `undefined`キーだけを隔離する互換層も追加し、Three.js 0.179の
 `WebGPURenderer.renderAsync()`をMeshStandardMaterial、DirectionalLight、Pointsを
-含むシーンでApple M4/Metal上に接続できることを確認した。次はresize/device-lost/
-present lifecycleを完成させ、未実装の標準WebGPU APIを段階的に埋める。
+含むシーンでApple M4/Metal上に接続できることを確認した。さらにAnimationMixerで
+変化するTransformとmorph targetを同じ標準Renderer経路で検証し、Three.jsが生成する
+texture-array `textureLoad`のLOD型を現行Naga向けに正規化した。次はresize/device-lost/
+present lifecycleを完成させ、skin用joint texture、完全なreadback、未実装の標準WebGPU
+APIを段階的に埋める。
 
 ### Phase B: Three.js renderer実行
 
