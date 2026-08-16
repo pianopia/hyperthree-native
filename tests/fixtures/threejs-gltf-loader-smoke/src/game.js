@@ -82,6 +82,7 @@ globalThis.__gltfKtx2Loaded = false;
 globalThis.__gltfKtx2NativeHook = false;
 globalThis.__gltfUastcKtx2Loaded = false;
 globalThis.__gltfAudioLoaded = false;
+globalThis.__gltfPositionalAudio = false;
 globalThis.__gltfBasisKtx2Loaded = false;
 globalThis.__gltfDracoLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
@@ -180,6 +181,13 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
       const listener = new THREE.AudioListener();
       const sound = new THREE.Audio(listener);
       sound.setBuffer(audioBuffer);
+      const positional = new THREE.PositionalAudio(listener);
+      positional.setBuffer(audioBuffer);
+      positional.setRefDistance(2);
+      positional.setRolloffFactor(0.75);
+      positional.panner.positionX.setValueAtTime(1.5, positional.context.currentTime);
+      globalThis.__gltfPositionalAudio = positional.panner.refDistance === 2 &&
+        positional.panner.rolloffFactor === 0.75 && positional.panner.positionX.value === 1.5;
       return audioBuffer;
     });
   const dracoLoader = new DRACOLoader();
@@ -284,7 +292,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {

@@ -1,6 +1,6 @@
 use crate::{
     asset::{decode_meshopt_buffer, AssetStore},
-    audio::{decode_audio, AudioEngine},
+    audio::{decode_audio, AudioEngine, AudioPlayback},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     draco::decode_mesh as decode_draco_mesh,
     storage::{SandboxFileStore, StorageStore},
@@ -988,7 +988,7 @@ impl JsRuntime {
 
         let audio_engine_for_play = audio_engine.clone();
         context
-            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 6, unsafe {
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioPlay"), 7, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = byte_array_value(args.get_or_undefined(0), context)?;
                     let looped = args.get_or_undefined(1).to_boolean();
@@ -996,9 +996,20 @@ impl JsRuntime {
                     let when = optional_number_arg(args, 3, context, 0.0)?;
                     let offset = optional_number_arg(args, 4, context, 0.0)?;
                     let duration = optional_number_arg(args, 5, context, 0.0)?;
+                    let speed = optional_number_arg(args, 6, context, 1.0)? as f32;
                     let id = audio_engine_for_play
                         .borrow_mut()
-                        .play(source, looped, volume, when, offset, duration)
+                        .play(
+                            source,
+                            AudioPlayback {
+                                looped,
+                                volume,
+                                when,
+                                offset,
+                                duration,
+                                speed,
+                            },
+                        )
                         .map_err(|error| {
                             JsNativeError::error()
                                 .with_message(format!("native audio playback failed: {error}"))
@@ -1045,6 +1056,65 @@ impl JsRuntime {
                 })
             })
             .map_err(|error| anyhow::anyhow!("failed to register audio volume binding: {error}"))?;
+
+        let audio_engine_for_speed = audio_engine.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeAudioSetSpeed"), 2, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let id = geometry_id_arg(args, 0, context)?;
+                    let speed = number_arg(args, 1, context)? as f32;
+                    audio_engine_for_speed.borrow_mut().set_speed(id, speed);
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register audio speed binding: {error}"))?;
+
+        let audio_engine_for_position = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioSetPosition"),
+                4,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let id = geometry_id_arg(args, 0, context)?;
+                        let position = [
+                            number_arg(args, 1, context)? as f32,
+                            number_arg(args, 2, context)? as f32,
+                            number_arg(args, 3, context)? as f32,
+                        ];
+                        audio_engine_for_position
+                            .borrow_mut()
+                            .set_emitter_position(id, position);
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio position binding: {error}")
+            })?;
+
+        let audio_engine_for_listener = audio_engine.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeAudioSetListenerPosition"),
+                3,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, args, context| {
+                        let position = [
+                            number_arg(args, 0, context)? as f32,
+                            number_arg(args, 1, context)? as f32,
+                            number_arg(args, 2, context)? as f32,
+                        ];
+                        audio_engine_for_listener
+                            .borrow_mut()
+                            .set_listener_position(position);
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register audio listener binding: {error}")
+            })?;
 
         context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeMeshopt"), 5, unsafe {
@@ -1630,6 +1700,20 @@ impl JsRuntime {
                   connect(destination) { this._destination = destination; return destination; }
                   disconnect() { this._destination = null; }
                 };
+                const registerAudioSource = (node, id) => {
+                  if (!node) return;
+                  if (node.__hyperthreeSourceIds && !node.__hyperthreeSourceIds.includes(id)) node.__hyperthreeSourceIds.push(id);
+                  if (node._destination && node._destination !== node) registerAudioSource(node._destination, id);
+                  if (node.__hyperthreeRegisterSource) node.__hyperthreeRegisterSource(id);
+                };
+                const audioGraphGain = (node) => {
+                  let current = node;
+                  for (let depth = 0; depth < 16 && current; depth += 1) {
+                    if (current.gain?.value !== undefined) return Number(current.gain.value);
+                    current = current._destination;
+                  }
+                  return 1;
+                };
                 globalThis.GainNode = globalThis.GainNode || class GainNode extends AudioNode {
                   constructor(context) {
                     super(context);
@@ -1650,17 +1734,24 @@ impl JsRuntime {
                     this.onended = null;
                     this.__hyperthreeStarted = false;
                     this.__hyperthreeAudioParams = [];
-                    this.playbackRate = makeAudioParam(this, 1);
-                    this.detune = makeAudioParam(this, 0);
+                    const updateSpeed = () => {
+                      if (this.__hyperthreeAudioId !== undefined) {
+                        const speed = Number(this.playbackRate.value) * Math.pow(2, Number(this.detune.value) / 1200);
+                        __hyperthreeAudioSetSpeed(this.__hyperthreeAudioId, speed);
+                      }
+                    };
+                    this.playbackRate = makeAudioParam(this, 1, updateSpeed);
+                    this.detune = makeAudioParam(this, 0, updateSpeed);
                   }
                   start(when = 0, offset = 0, duration = 0) {
                     if (this.__hyperthreeStarted || !this.buffer?.__hyperthreeEncoded) return;
                     this.__hyperthreeStarted = true;
                     const destination = this._destination;
-                    const volume = destination?.gain?.value ?? 1;
-                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, volume, when, offset, duration);
+                    const volume = audioGraphGain(destination);
+                    const speed = Number(this.playbackRate.value) * Math.pow(2, Number(this.detune.value) / 1200);
+                    const id = __hyperthreeAudioPlay(this.buffer.__hyperthreeEncoded, this.loop, volume, when, offset, duration, speed);
                     this.__hyperthreeAudioId = id;
-                    if (destination?.__hyperthreeSourceIds) destination.__hyperthreeSourceIds.push(id);
+                    registerAudioSource(destination, id);
                   }
                   stop() {
                     if (this.__hyperthreeAudioId !== undefined) __hyperthreeAudioStop(this.__hyperthreeAudioId);
@@ -1670,6 +1761,8 @@ impl JsRuntime {
                 globalThis.PannerNode = globalThis.PannerNode || class PannerNode extends AudioNode {
                   constructor(context) {
                     super(context);
+                    this.__hyperthreeSourceIds = [];
+                    this.__hyperthreePanner = true;
                     this.panningModel = 'HRTF';
                     this.distanceModel = 'inverse';
                     this.refDistance = 1;
@@ -1678,12 +1771,19 @@ impl JsRuntime {
                     this.coneInnerAngle = 360;
                     this.coneOuterAngle = 0;
                     this.coneOuterGain = 0;
-                    this.positionX = makeAudioParam(this, 0);
-                    this.positionY = makeAudioParam(this, 0);
-                    this.positionZ = makeAudioParam(this, 0);
+                    const updatePosition = () => {
+                      for (const id of this.__hyperthreeSourceIds) __hyperthreeAudioSetPosition(id, this.positionX.value, this.positionY.value, this.positionZ.value);
+                    };
+                    this.positionX = makeAudioParam(this, 0, updatePosition);
+                    this.positionY = makeAudioParam(this, 0, updatePosition);
+                    this.positionZ = makeAudioParam(this, 0, updatePosition);
                     this.orientationX = makeAudioParam(this, 1);
                     this.orientationY = makeAudioParam(this, 0);
                     this.orientationZ = makeAudioParam(this, 0);
+                  }
+                  __hyperthreeRegisterSource(id) {
+                    if (!this.__hyperthreeSourceIds.includes(id)) this.__hyperthreeSourceIds.push(id);
+                    __hyperthreeAudioSetPosition(id, this.positionX.value, this.positionY.value, this.positionZ.value);
                   }
                   setPosition(x, y, z) { this.positionX.value = x; this.positionY.value = y; this.positionZ.value = z; }
                   setOrientation(x, y, z) { this.orientationX.value = x; this.orientationY.value = y; this.orientationZ.value = z; }
@@ -1693,8 +1793,9 @@ impl JsRuntime {
                     this.sampleRate = 44100;
                     this.state = 'running';
                     this.destination = { context: this, __hyperthreeSourceIds: [] };
+                    const updateListenerPosition = () => __hyperthreeAudioSetListenerPosition(this.listener.positionX.value, this.listener.positionY.value, this.listener.positionZ.value);
                     this.listener = {
-                      positionX: makeAudioParam(null, 0), positionY: makeAudioParam(null, 0), positionZ: makeAudioParam(null, 0),
+                      positionX: makeAudioParam(null, 0, updateListenerPosition), positionY: makeAudioParam(null, 0, updateListenerPosition), positionZ: makeAudioParam(null, 0, updateListenerPosition),
                       forwardX: makeAudioParam(null, 0), forwardY: makeAudioParam(null, 0), forwardZ: makeAudioParam(null, -1),
                       upX: makeAudioParam(null, 0), upY: makeAudioParam(null, 1), upZ: makeAudioParam(null, 0),
                       setPosition() {}, setOrientation() {},
@@ -3176,15 +3277,24 @@ mod tests {
                   .then((buffer) => context.decodeAudioData(buffer))
                   .then((audioBuffer) => {
                     const gain = context.createGain();
+                    const panner = context.createPanner();
                     const source = context.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(gain);
+                    source.connect(panner);
+                    panner.connect(gain);
                     gain.connect(context.destination);
                     gain.gain.setValueAtTime(0.5, context.currentTime);
+                    source.playbackRate.setValueAtTime(1.25, context.currentTime);
+                    source.detune.setValueAtTime(1200, context.currentTime);
+                    panner.positionX.setValueAtTime(2, context.currentTime);
+                    panner.positionY.setValueAtTime(3, context.currentTime);
+                    panner.positionZ.setValueAtTime(-4, context.currentTime);
                     globalThis.__audioProbe = audioBuffer.sampleRate === 8 &&
                       audioBuffer.length === 4 && audioBuffer.numberOfChannels === 1 &&
                       Math.abs(audioBuffer.getChannelData(0)[1] - 0.25) < 0.01 &&
-                      typeof source.start === 'function' && typeof source.stop === 'function';
+                      typeof source.start === 'function' && typeof source.stop === 'function' &&
+                      source.playbackRate.value === 1.25 && source.detune.value === 1200 &&
+                      panner.positionX.value === 2 && panner.positionY.value === 3 && panner.positionZ.value === -4;
                   });
                 "#,
             )

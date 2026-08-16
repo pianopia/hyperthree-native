@@ -7,6 +7,8 @@ with an embedded PNG texture, an `EXT_meshopt_compression` glTF, and a
 `KHR_texture_basisu` glTFs using raw BC1, BasisLZ, and UASTC KTX2 textures. It also
 creates a standard Three.js `AudioListener`/`Audio` pair and loads a WAV buffer
 through the native `AudioContext` compatibility surface.
+It also constructs `PositionalAudio` and exercises native panner position and
+playback parameter propagation without requiring a physical audio device.
 `SkinnedMesh`/`Skeleton` objects,
 advances an `AnimationMixer`, renders `InstancedMesh`/`Line`/`Sprite` objects,
 `BatchedMesh`, shadows, an equirectangular environment, an MRT target, and an
