@@ -39,7 +39,7 @@
 - [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
 - [x] Three.js 0.179 AnimationMixer transform and morph-target shader smoke on native Metal
 - [x] Three.js 0.179 SkinnedMesh/Skeleton and bone-transform AnimationMixer smoke on native Metal
-- [x] Three.js 0.179 MeshStandardNodeMaterial, TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal
+- [x] Three.js 0.179 MeshStandardNodeMaterial/MeshPhysicalNodeMaterial (normal map, clearcoat, transmission), TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal
 - [x] Three.js 0.179 GLTFLoader embedded-buffer SkinnedMesh/Skeleton/AnimationMixer/WebGPU fixture
 - [x] Three.js 0.179 GLTFLoader GLB, external-buffer, external-PNG texture, and canvas-resize fixture
 - [x] Three.js 0.179 standard WebGPURenderer InstancedMesh, BatchedMesh, Line, Sprite, Shadow, Environment, MRT, and indirect-draw/readback fixture

@@ -85,7 +85,7 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
 AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
 外部PNG、canvas resizeを同じfixtureで検証済みである。Three.js 0.179の
-`MeshStandardNodeMaterial`、TSL `colorNode`、
+`MeshStandardNodeMaterial`/`MeshPhysicalNodeMaterial`（normal map、clearcoat、transmission）、TSL `colorNode`、
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。InstancedMesh、BatchedMesh、Line、Sprite、DirectionalLight
 shadow、equirectangular environment、MRT、indirect drawとそのGPU readbackも同じfixtureで

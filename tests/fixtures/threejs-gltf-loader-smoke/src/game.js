@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { WebGPURenderer } from "three/webgpu";
+import { MeshPhysicalNodeMaterial, WebGPURenderer } from "three/webgpu";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
@@ -53,6 +53,27 @@ const line = new THREE.Line(
 const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x66ff88 }));
 sprite.position.set(0, 1.4, 0);
 sprite.scale.setScalar(0.35);
+const normalTexture = new THREE.DataTexture(
+  new Uint8Array([128, 128, 255, 255]),
+  1,
+  1,
+  THREE.RGBAFormat,
+);
+normalTexture.needsUpdate = true;
+const physicalMaterial = new MeshPhysicalNodeMaterial({
+  color: 0x88aaff,
+  roughness: 0.28,
+  metalness: 0.35,
+  normalMap: normalTexture,
+  clearcoat: 0.65,
+  clearcoatRoughness: 0.12,
+  transmission: 0.08,
+  thickness: 0.15,
+});
+const physicalMesh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 10), physicalMaterial);
+physicalMesh.position.set(0, 0.25, 0);
+physicalMesh.castShadow = true;
+physicalMesh.receiveShadow = true;
 const batched = new THREE.BatchedMesh(
   2,
   128,
@@ -63,7 +84,7 @@ const batchedGeometryId = batched.addGeometry(new THREE.BoxGeometry(0.3, 0.3, 0.
 const batchedInstanceId = batched.addInstance(batchedGeometryId);
 instanceMatrix.makeTranslation(0, -1.2, 0);
 batched.setMatrixAt(batchedInstanceId, instanceMatrix);
-featureGroup.add(instanced, line, sprite, batched);
+featureGroup.add(instanced, line, sprite, physicalMesh, batched);
 featureGroup.traverse((object) => {
   if (object.isMesh || object.isBatchedMesh || object.isInstancedMesh) {
     object.castShadow = true;
@@ -91,6 +112,7 @@ globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
 globalThis.__gltfEnvironmentSmoke = false;
+globalThis.__gltfPhysicalPbrSmoke = false;
 globalThis.__gltfMrtSmoke = false;
 globalThis.__gltfIndirectSmoke = false;
 globalThis.__gltfReadbackSmoke = false;
@@ -569,6 +591,9 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   scene.add(uastcKtx2Gltf.scene);
   scene.add(dracoGltf.scene);
   globalThis.__gltfEnvironmentSmoke = scene.environment === environmentTexture;
+  globalThis.__gltfPhysicalPbrSmoke = physicalMaterial.isMeshPhysicalNodeMaterial === true &&
+    physicalMaterial.clearcoat === 0.65 && physicalMaterial.transmission === 0.08 &&
+    physicalMaterial.normalMap === normalTexture;
   globalThis.__gltfSmokeStage = "before-render";
   const mrt = new THREE.RenderTarget(64, 64, { count: 2, depthBuffer: true });
   renderer.setRenderTarget(mrt);
@@ -597,6 +622,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded || !globalThis.__gltfKtx2Loaded || !globalThis.__gltfKtx2NativeHook || !globalThis.__gltfBasisKtx2Loaded || !globalThis.__gltfUastcKtx2Loaded || !globalThis.__gltfDracoLoaded || !globalThis.__gltfAudioLoaded || !globalThis.__gltfAudioFilter || !globalThis.__gltfAudioAnalyser || !globalThis.__gltfPositionalAudio ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
+      !globalThis.__gltfPhysicalPbrSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfMappedBufferSmoke || !globalThis.__gltfQuerySmoke || !globalThis.__gltfRenderBundleSmoke || !globalThis.__gltfResourceLifecycleSmoke ||
       !globalThis.__gltfClearBufferSmoke || !globalThis.__gltfBufferTextureSmoke ||
       !globalThis.__gltfDeviceLimitsSmoke || !globalThis.__gltfQueueSyncSmoke ||
