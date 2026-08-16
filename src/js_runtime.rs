@@ -767,6 +767,57 @@ impl JsRuntime {
                 anyhow::anyhow!("failed to register pointer lock state binding: {error}")
             })?;
 
+        let request_fullscreen_state = input_state.clone();
+        context
+            .register_global_builtin_callable(
+                js_string!("__hyperthreeRequestFullscreen"),
+                0,
+                unsafe {
+                    NativeFunction::from_closure(move |_this, _args, _context| {
+                        request_fullscreen_state
+                            .lock()
+                            .map_err(|_| {
+                                JsNativeError::error().with_message("input state poisoned")
+                            })?
+                            .request_fullscreen();
+                        Ok(JsValue::undefined())
+                    })
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register fullscreen request binding: {error}")
+            })?;
+
+        let exit_fullscreen_state = input_state.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeExitFullscreen"), 0, unsafe {
+                NativeFunction::from_closure(move |_this, _args, _context| {
+                    exit_fullscreen_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("input state poisoned"))?
+                        .request_exit_fullscreen();
+                    Ok(JsValue::undefined())
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register fullscreen exit binding: {error}")
+            })?;
+
+        let fullscreen_state = input_state.clone();
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeIsFullscreen"), 0, unsafe {
+                NativeFunction::from_closure(move |_this, _args, _context| {
+                    let fullscreen = fullscreen_state
+                        .lock()
+                        .map_err(|_| JsNativeError::error().with_message("input state poisoned"))?
+                        .is_fullscreen();
+                    Ok(JsValue::from(fullscreen))
+                })
+            })
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register fullscreen state binding: {error}")
+            })?;
+
         let mouse_position_input_state = input_state;
         context
             .register_global_builtin_callable(
@@ -3967,6 +4018,20 @@ mod tests {
             .unwrap();
         assert_eq!(
             input_state.lock().unwrap().take_pointer_lock_request(),
+            Some(false)
+        );
+        runtime
+            .execute_source("__hyperthreeRequestFullscreen();")
+            .unwrap();
+        assert_eq!(
+            input_state.lock().unwrap().take_fullscreen_request(),
+            Some(true)
+        );
+        runtime
+            .execute_source("__hyperthreeExitFullscreen();")
+            .unwrap();
+        assert_eq!(
+            input_state.lock().unwrap().take_fullscreen_request(),
             Some(false)
         );
     }

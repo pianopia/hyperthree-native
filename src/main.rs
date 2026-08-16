@@ -24,7 +24,7 @@ use winit::{
     event::{Event, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::{ModifiersState, PhysicalKey},
-    window::{CursorGrabMode, WindowBuilder},
+    window::{CursorGrabMode, Fullscreen, WindowBuilder},
 };
 
 #[derive(Debug, Parser)]
@@ -515,6 +515,13 @@ fn run_native(
                 {
                     apply_pointer_lock_request(&mut host, lock);
                 }
+                if let Some(fullscreen) = input_state
+                    .lock()
+                    .expect("input state mutex should not be poisoned")
+                    .take_fullscreen_request()
+                {
+                    apply_fullscreen_request(&mut host, fullscreen);
+                }
                 let now = Instant::now();
                 let delta_seconds = now.duration_since(last_frame).as_secs_f64().clamp(0.0, 0.1);
                 last_frame = now;
@@ -576,6 +583,20 @@ fn apply_pointer_lock_request(host: &mut GameHost, lock: bool) {
         .expect("input state mutex should not be poisoned")
         .set_pointer_locked(locked);
     dispatch_input_event(host, "pointerlockchange", json!({}));
+}
+
+fn apply_fullscreen_request(host: &mut GameHost, fullscreen: bool) {
+    let window = host.renderer().window.clone();
+    if fullscreen {
+        window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+    } else {
+        window.set_fullscreen(None);
+    }
+    host.input_state
+        .lock()
+        .expect("input state mutex should not be poisoned")
+        .set_fullscreen(fullscreen);
+    dispatch_input_event(host, "fullscreenchange", json!({}));
 }
 
 fn mouse_button_id(button: MouseButton) -> Option<u8> {

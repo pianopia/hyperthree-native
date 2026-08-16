@@ -53,6 +53,8 @@ render/compute passを同じ意味で提供する必要がある。
 イベント購読で動かせる境界も追加している。`requestPointerLock()`、
 `document.exitPointerLock()`、`document.pointerLockElement`もwinitのcursor grabと
 ネイティブカーソル可視性へ接続し、`pointerlockchange`を配送する。
+さらに`requestFullscreen()`、`document.exitFullscreen()`、`document.fullscreenElement`を
+winitのborderless fullscreenへ接続し、`fullscreenchange`を配送する。
 
 ## 実装フェーズ
 

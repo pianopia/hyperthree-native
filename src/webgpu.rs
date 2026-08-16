@@ -4312,6 +4312,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     addEventListener(type, listener) { globalThis.addEventListener(type, listener); },
     removeEventListener(type, listener) { globalThis.removeEventListener(type, listener); },
     requestPointerLock() { __hyperthreeRequestPointerLock(); },
+    requestFullscreen() { __hyperthreeRequestFullscreen(); return Promise.resolve(); },
     setPointerCapture() {},
     releasePointerCapture() {},
     setAttribute() {},
@@ -4339,9 +4340,14 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     body: { appendChild() {}, removeChild() {} },
   };
   globalThis.document.exitPointerLock = () => { __hyperthreeExitPointerLock(); };
+  globalThis.document.exitFullscreen = () => { __hyperthreeExitFullscreen(); return Promise.resolve(); };
   Object.defineProperty(globalThis.document, 'pointerLockElement', {
     configurable: true,
     get: () => __hyperthreeIsPointerLocked() ? nativeCanvas : null,
+  });
+  Object.defineProperty(globalThis.document, 'fullscreenElement', {
+    configurable: true,
+    get: () => __hyperthreeIsFullscreen() ? nativeCanvas : null,
   });
   const normalizeBindGroupEntry = entry => {
     const resource = entry.resource;

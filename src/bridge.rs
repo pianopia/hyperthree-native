@@ -294,6 +294,8 @@ pub struct NativeInputState {
     mouse_position: [f64; 2],
     pointer_lock_request: Option<bool>,
     pointer_locked: bool,
+    fullscreen_request: Option<bool>,
+    fullscreen: bool,
 }
 
 pub type SharedInputState = Arc<Mutex<NativeInputState>>;
@@ -322,6 +324,9 @@ impl NativeInputState {
         if self.pointer_locked {
             self.pointer_lock_request = Some(false);
         }
+        if self.fullscreen {
+            self.fullscreen_request = Some(false);
+        }
     }
 
     pub fn request_pointer_lock(&mut self) {
@@ -342,6 +347,26 @@ impl NativeInputState {
 
     pub fn pointer_locked(&self) -> bool {
         self.pointer_locked
+    }
+
+    pub fn request_fullscreen(&mut self) {
+        self.fullscreen_request = Some(true);
+    }
+
+    pub fn request_exit_fullscreen(&mut self) {
+        self.fullscreen_request = Some(false);
+    }
+
+    pub fn take_fullscreen_request(&mut self) -> Option<bool> {
+        self.fullscreen_request.take()
+    }
+
+    pub fn set_fullscreen(&mut self, fullscreen: bool) {
+        self.fullscreen = fullscreen;
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
     }
 
     pub fn set_mouse_button(&mut self, button: u8, pressed: bool) {
