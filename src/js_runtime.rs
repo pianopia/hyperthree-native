@@ -891,8 +891,9 @@ impl JsRuntime {
     }
 
     pub fn execute_source(&mut self, source: &str) -> Result<()> {
+        let source = normalize_three_compatibility_source(source);
         self.context
-            .eval(Source::from_bytes(source))
+            .eval(Source::from_bytes(source.as_ref()))
             .map(|_| ())
             .map_err(|error| anyhow::anyhow!("JavaScript evaluation failed: {error}"))?;
         self.context
@@ -902,8 +903,9 @@ impl JsRuntime {
     }
 
     fn execute_module(&mut self, path: &Path, source: &str) -> Result<()> {
+        let source = normalize_three_compatibility_source(source);
         let module = Module::parse(
-            Source::from_bytes(source).with_path(path),
+            Source::from_bytes(source.as_ref()).with_path(path),
             None,
             &mut self.context,
         )
@@ -945,6 +947,27 @@ impl JsRuntime {
         );
         self.execute_source(&source)
     }
+}
+
+fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, str> {
+    let minified = "}get(e){let t=this.weakMap;";
+    let readable = "get( keys ) {\n\n\t\tlet map = this.weakMap;";
+
+    if source.contains(minified) {
+        return std::borrow::Cow::Owned(source.replace(
+            minified,
+            "}get(e){if(e.length===0)return;let t=this.weakMap;",
+        ));
+    }
+
+    if source.contains(readable) {
+        return std::borrow::Cow::Owned(source.replace(
+            readable,
+            "get( keys ) {\n\n\t\tif ( keys.length === 0 ) return undefined;\n\n\t\tlet map = this.weakMap;",
+        ));
+    }
+
+    std::borrow::Cow::Borrowed(source)
 }
 
 fn is_module_source(path: &Path, source: &str) -> bool {
@@ -1231,12 +1254,32 @@ fn number_array_arg(args: &[JsValue], index: usize, context: &mut Context) -> Js
 
 #[cfg(test)]
 mod tests {
-    use super::JsRuntime;
+    use super::{normalize_three_compatibility_source, JsRuntime};
     use crate::bridge::{NativeInputState, NativeRenderState};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn normalizes_three_chain_map_empty_key_lookup() {
+        let minified = "class ChainMap{constructor(){this.weakMap=new WeakMap}get(e){let t=this.weakMap;return t.get(e[e.length-1])}}";
+        let normalized = normalize_three_compatibility_source(minified);
+        assert!(normalized.contains("get(e){if(e.length===0)return;let t=this.weakMap;"));
+
+        let readable = "class ChainMap {\n\tget( keys ) {\n\n\t\tlet map = this.weakMap;\n\t}";
+        let normalized = normalize_three_compatibility_source(readable);
+        assert!(normalized.contains("if ( keys.length === 0 ) return undefined;"));
+    }
+
+    #[test]
+    fn leaves_non_three_source_unchanged() {
+        let source = "const value = 42;";
+        assert!(matches!(
+            normalize_three_compatibility_source(source),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn frame_callback_updates_native_state() {

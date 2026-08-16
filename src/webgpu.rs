@@ -2718,29 +2718,23 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   // Three.js' node-cache can transiently use an undefined chain key while
   // nested node graphs are being compiled. Browsers reject that key, but Boa
   // otherwise aborts the whole renderer initialization. Preserve native
-  // WeakMap behavior for object keys and isolate this embedded-runtime quirk
-  // to the undefined-key slot.
+  // WeakMap behavior for object keys while treating non-object keys as
+  // cache misses in the embedded runtime.
   const NativeWeakMap = globalThis.WeakMap;
   class HyperThreeWeakMap {
     constructor(entries) {
       this.__native = new NativeWeakMap();
-      this.__undefined = undefined;
-      this.__hasUndefined = false;
       if (entries) for (const entry of entries) this.set(entry[0], entry[1]);
     }
-    get(key) { return key === undefined ? this.__undefined : this.__native.get(key); }
-    has(key) { return key === undefined ? this.__hasUndefined : this.__native.has(key); }
+    get(key) { return key == null ? undefined : this.__native.get(key); }
+    has(key) { return key == null ? false : this.__native.has(key); }
     set(key, value) {
-      if (key === undefined) { this.__undefined = value; this.__hasUndefined = true; }
-      else this.__native.set(key, value);
+      if (key != null) this.__native.set(key, value);
       return this;
     }
     delete(key) {
-      if (key === undefined) {
-        const existed = this.__hasUndefined;
-        this.__undefined = undefined;
-        this.__hasUndefined = false;
-        return existed;
+      if (key == null) {
+        return false;
       }
       return this.__native.delete(key);
     }
