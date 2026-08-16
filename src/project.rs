@@ -163,6 +163,7 @@ export default defineConfig({
 "#;
 
 const INIT_GAME_JS: &str = r#"import * as THREE from "three";
+import { WebGPURenderer } from "three/webgpu";
 
 const scene = new THREE.Scene();
 scene.name = "AI-created HyperThree scene";
@@ -171,32 +172,78 @@ camera.position.set(0, 0, 4);
 camera.lookAt(0, 0, 0);
 const cube = new THREE.Mesh(
   new THREE.BoxGeometry(1.4, 1.4, 1.4),
-  new THREE.MeshBasicMaterial({ color: 0x19ccef }),
+  new THREE.MeshPhysicalMaterial({
+    color: 0x19ccef,
+    metalness: 0.25,
+    roughness: 0.28,
+    clearcoat: 0.35,
+  }),
 );
 scene.add(cube);
+scene.add(new THREE.HemisphereLight(0x9fc9ff, 0x101018, 1.4));
+const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
+keyLight.position.set(-3, 4, 5);
+scene.add(keyLight);
 
-// Keep the game state independent from DOM/WebGL. HyperThree will expose the
-// native WebGPU bindings here as the runtime API is expanded.
+// The native host owns the frame clock. This is the same renderer contract as
+// a browser Three.js WebGPURenderer, but the canvas is backed by the native
+// wgpu surface instead of a DOM/WebGL context.
+const renderer = new WebGPURenderer({
+  canvas: HyperThreeNative.canvas,
+  antialias: true,
+});
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+let rendererReady = false;
+let renderError = null;
+let renderInFlight = false;
+
+const resize = () => {
+  const width = Math.max(1, window.innerWidth || 1280);
+  const height = Math.max(1, window.innerHeight || 720);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  if (rendererReady) renderer.setSize(width, height, false);
+};
+window.addEventListener("resize", resize);
+
+const rendererReadyPromise = renderer.init().then(() => {
+  rendererReady = true;
+  resize();
+}).catch((error) => {
+  renderError = error;
+});
+
 globalThis.HyperThreeGame = {
   scene,
   camera,
   cube,
-  targetObjects: 500000,
-  renderer: "native-wgpu"
+  renderer,
+  rendererReady: rendererReadyPromise,
 };
 
-HyperThreeNative.setClearColor(0.015, 0.02, 0.05, 1.0);
+renderer.setClearColor(0x04050d, 1.0);
 
 let elapsed = 0;
 globalThis.HyperThreeGame.update = (deltaSeconds) => {
+  if (renderError) throw renderError;
   elapsed += deltaSeconds;
   cube.position.y = Math.sin(elapsed) * 0.25;
   cube.rotation.y = elapsed + 0.55;
-  HyperThreeNative.syncThreeScene(scene, camera);
+  if (!rendererReady || renderInFlight) return;
+  renderInFlight = true;
+  renderer.renderAsync(scene, camera).then(() => {
+    renderInFlight = false;
+  }).catch((error) => {
+    renderInFlight = false;
+    renderError = error;
+  });
 };
 
-globalThis.HyperThreeGame.onStart = () => {};
-globalThis.HyperThreeGame.onStop = () => {};
+globalThis.HyperThreeGame.onStart = () => { resize(); };
+globalThis.HyperThreeGame.onStop = () => {
+  window.removeEventListener("resize", resize);
+  renderer.dispose();
+};
 "#;
 
 const INIT_README: &str = r#"# My HyperThree Game
@@ -209,13 +256,14 @@ const INIT_README: &str = r#"# My HyperThree Game
 4. From the HyperThree Native checkout: `cargo run -- run --project /path/to/this/project`
 
 `hyperthree.toml` is the stable contract between the generated game and the
-native host. Keep browser-only DOM/WebGL calls out of the native entry until
-the corresponding native bridge is enabled.
+native host. Use the standard Three.js WebGPURenderer with
+`HyperThreeNative.canvas`; the native host provides the WebGPU binding and
+window/input lifecycle.
 "#;
 
 #[cfg(test)]
 mod tests {
-    use super::Manifest;
+    use super::{Manifest, INIT_GAME_JS};
 
     #[test]
     fn window_transparency_defaults_to_opaque() {
@@ -242,5 +290,13 @@ mod tests {
         )
         .expect("transparent manifest should parse");
         assert!(manifest.window.transparent);
+    }
+
+    #[test]
+    fn generated_project_uses_standard_webgpu_renderer() {
+        assert!(INIT_GAME_JS.contains("WebGPURenderer"));
+        assert!(INIT_GAME_JS.contains("HyperThreeNative.canvas"));
+        assert!(INIT_GAME_JS.contains("MeshPhysicalMaterial"));
+        assert!(!INIT_GAME_JS.contains("syncThreeScene(scene, camera)"));
     }
 }

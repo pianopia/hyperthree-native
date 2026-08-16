@@ -109,10 +109,12 @@ await writable.close();
 - `docs/roadmap.md`: ランタイムとコマースの全体ロードマップ
 - `.github/workflows/ci.yml`: macOS / Windows / LinuxのCI
 
-現在の雛形はThree.jsのシーンをバンドルしてネイティブホストへ渡し、
-`HyperThreeNative.setClearColor()`、`setCamera()`、`beginFrame()`、`pushCube()`で
-描画状態を更新し、`HyperThreeGame.update(deltaSeconds)`で毎フレーム処理できる
-開発導線までを提供します。`syncThreeScene(scene, camera)`は
+現在の雛形はThree.jsのシーンを標準`WebGPURenderer`でバンドルしてネイティブホストへ渡し、
+`HyperThreeGame.update(deltaSeconds)`で毎フレーム処理できる開発導線までを提供します。
+`HyperThreeNative.canvas`は標準Three.js `WebGPURenderer`へ渡すネイティブcanvasです。
+旧来の`HyperThreeNative.setClearColor()`、`setCamera()`、`beginFrame()`、`pushCube()`と
+`syncThreeScene(scene, camera)`は、移行・診断用の明示的な互換ブリッジとして残っています。
+`syncThreeScene(scene, camera)`は
 `BoxGeometry`、`PlaneGeometry`、`SphereGeometry`と任意の位置/index/UV
 `BufferGeometry`をネイティブ描画へ同期します。任意のブラウザ向けThree.js
 ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API

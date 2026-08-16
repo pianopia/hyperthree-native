@@ -1070,6 +1070,12 @@ impl NativeWebGpuContext {
             .filter(|value| !value.is_null())
             .map(depth_stencil_state)
             .transpose()?;
+        let multisample = descriptor
+            .get("multisample")
+            .filter(|value| !value.is_null())
+            .map(multisample_state)
+            .transpose()?
+            .unwrap_or_default();
         let primitive = primitive_state(descriptor.get("primitive"));
         let pipeline = self
             .device
@@ -1080,7 +1086,7 @@ impl NativeWebGpuContext {
                 fragment: fragment_state,
                 primitive,
                 depth_stencil,
-                multisample: wgpu::MultisampleState::default(),
+                multisample,
                 multiview: None,
             });
         drop(resources);
@@ -3313,6 +3319,18 @@ struct OwnedVertexBufferLayout {
     attributes: Vec<wgpu::VertexAttribute>,
 }
 
+fn multisample_state(value: &Value) -> Result<wgpu::MultisampleState, String> {
+    let count = json_u32(value, "count", 1);
+    if count == 0 {
+        return Err("GPURenderPipeline.multisample.count must be greater than zero".to_string());
+    }
+    Ok(wgpu::MultisampleState {
+        count,
+        mask: json_u32(value, "mask", !0) as u64,
+        alpha_to_coverage_enabled: json_bool(value, "alphaToCoverageEnabled", false),
+    })
+}
+
 fn bind_group_layout_entry(value: &Value) -> Result<wgpu::BindGroupLayoutEntry, String> {
     let binding = json_u32(value, "binding", 0);
     let visibility = shader_stages(json_u32(value, "visibility", 0));
@@ -4785,6 +4803,11 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     } : null,
     primitive: descriptor.primitive,
     depthStencil: descriptor.depthStencil,
+    multisample: descriptor.multisample ? {
+      count: descriptor.multisample.count ?? 1,
+      mask: descriptor.multisample.mask ?? 0xffffffff,
+      alphaToCoverageEnabled: descriptor.multisample.alphaToCoverageEnabled ?? false,
+    } : null,
   });
   const normalizeRenderPassDescriptor = descriptor => ({
     colorAttachments: (descriptor.colorAttachments ?? []).map(attachment => attachment == null ? null : ({
@@ -5143,7 +5166,8 @@ const WEBGPU_BOOTSTRAP: &str = r#"
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_wgsl, texture_format, texture_usage_for_dimension};
+    use super::{multisample_state, sanitize_wgsl, texture_format, texture_usage_for_dimension};
+    use serde_json::json;
 
     #[test]
     fn removes_unsupported_wgsl_diagnostic_directives() {
@@ -5223,5 +5247,18 @@ mod tests {
         assert!(usage.contains(wgpu::TextureUsages::COPY_DST));
         assert!(usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
         assert!(!usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
+    }
+
+    #[test]
+    fn preserves_pipeline_multisample_state() {
+        let state = multisample_state(&json!({
+            "count": 4,
+            "mask": 0x0f0f0f0f_u64,
+            "alphaToCoverageEnabled": true,
+        }))
+        .unwrap();
+        assert_eq!(state.count, 4);
+        assert_eq!(state.mask, 0x0f0f0f0f);
+        assert!(state.alpha_to_coverage_enabled);
     }
 }

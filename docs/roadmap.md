@@ -37,6 +37,7 @@
 - [x] Initial GPUCanvasContext configure/unconfigure and native swapchain presentation path
 - [x] Project-relative fetch/Request/Response/Headers and ArrayBuffer/TextDecoder asset boundary
 - [x] Three.js 0.179 WebGPURenderer PBR/DirectionalLight/Points scene smoke on native Metal
+- [x] AI project scaffold using standard WebGPURenderer with native canvas, resize, and MSAA pipeline state
 - [x] Three.js 0.179 AnimationMixer transform and morph-target shader smoke on native Metal
 - [x] Three.js 0.179 SkinnedMesh/Skeleton and bone-transform AnimationMixer smoke on native Metal
 - [x] Three.js 0.179 MeshStandardNodeMaterial/MeshPhysicalNodeMaterial (normal map, clearcoat, transmission), TSL colorNode, PostProcessing, pass, and Bloom smoke on native Metal

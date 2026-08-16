@@ -12,19 +12,15 @@ generated project and the runtime.
 You are building a Three.js game for HyperThree Native.
 Edit only src/game.js and public/ assets.
 Use Three.js scene, camera, geometry, standard/physical materials, lights, and
-animation state, but do not use document, WebGLRenderer, or browser-only input
-APIs until the standard WebGPU binding phase is enabled.
+animation state. New games should use the standard `WebGPURenderer` with
+`HyperThreeNative.canvas`; the generated project already provides this setup,
+including PBR, resize handling, and the native-hosted frame loop.
 Expose the playable state through globalThis.HyperThreeGame.
-Use HyperThreeNative.setClearColor(), setCamera(), beginFrame(), and
-syncThreeScene() (or pushCube(), pushPlane(), and pushSphere()) for the current
-native rendering bridge. Put per-frame logic in
+The older `HyperThreeNative.setClearColor()`/`syncThreeScene()` (or
+`pushCube()`, `pushPlane()`, and `pushSphere()`) path remains available for
+migration and diagnostics, but is not the default for new games. Put per-frame logic in
 HyperThreeGame.update(deltaSeconds), and use HyperThreeNative.isKeyDown("KeyW")
-for keyboard input. When using a Three.js Scene, call
-HyperThreeNative.syncThreeScene(scene, camera) each frame; its current native
-geometry coverage includes BoxGeometry, PlaneGeometry, SphereGeometry, and
-position/normal/index/UV BufferGeometry. Standard material color, metalness,
-roughness, emissive, DirectionalLight, and matrixWorld transforms are transported
-to the native direct-light PBR pass. Use HyperThreeNative.loadAsset("public/models/example.glb")
+for keyboard input. Use `HyperThreeNative.loadAsset("public/models/example.glb")`
 for native asset metadata and HyperThreeNative.drawAsset("public/models/example.glb",
 0, 0, options) for native glTF primitive rendering. Optional onStart() and
 onStop() callbacks are available. Use isMouseButtonDown(0) and
@@ -42,6 +38,8 @@ docs/threejs-compatibility-architecture.md.
 3. Configure the existing bundler to emit that IIFE bundle.
 4. Run `hyperthree-native build --project <path>`.
 
-This avoids making the native host understand every web bundler. The next SDK
-increment will provide native replacements for the browser APIs commonly used
-by Three.js renderers.
+This avoids making the native host understand every web bundler. The native
+WebGPU binding already covers the standard renderer path used by the generated
+project. Additional browser APIs should be added to the compatibility layer
+when a game needs them, with an explicit capability check rather than a silent
+rendering fallback.

@@ -5,6 +5,9 @@ const hyperthreeRegisteredGeometryIds = new Set();
 globalThis.HyperThreeNative = {
   version: "0.1.0",
   renderer: "wgpu-native",
+  // Standard Three.js WebGPURenderer receives the native canvas directly.
+  // syncThreeScene() remains below as an explicit migration/diagnostic bridge.
+  canvas: globalThis.__hyperthreeNativeCanvas,
   zeroCopyAssets: true,
   gpuDrivenCulling: false,
   setClearColor(r, g, b, a = 1) {
