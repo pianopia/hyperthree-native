@@ -322,6 +322,30 @@ fn generate_vertex_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32;
 
 type DecodedMeshoptViews = HashMap<usize, Vec<u8>>;
 
+pub(crate) fn decode_meshopt_buffer(
+    compressed: &[u8],
+    count: usize,
+    stride: usize,
+    mode: &str,
+    filter: &str,
+) -> Result<Vec<u8>> {
+    let mut bytes = match mode {
+        "ATTRIBUTES" => decode_meshopt_vertices(compressed, count, stride)?,
+        "TRIANGLES" => decode_meshopt_indices(compressed, count, stride)?,
+        "INDICES" => decode_meshopt_index_sequence(compressed, count, stride)?,
+        other => anyhow::bail!("unsupported EXT_meshopt_compression mode: {other}"),
+    };
+    if mode == "ATTRIBUTES" {
+        apply_meshopt_filter(&mut bytes, stride, filter)?;
+    } else {
+        anyhow::ensure!(
+            filter == "NONE",
+            "meshopt filters are only valid for attributes"
+        );
+    }
+    Ok(bytes)
+}
+
 fn decode_meshopt_views(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
@@ -346,15 +370,11 @@ fn decode_meshopt_views(
         let compressed = source
             .get(source_offset..source_end)
             .context("meshopt source range is outside its buffer")?;
-        let mut bytes = match mode {
-            "ATTRIBUTES" => decode_meshopt_vertices(compressed, count, stride)?,
-            "TRIANGLES" => decode_meshopt_indices(compressed, count, stride)?,
-            "INDICES" => decode_meshopt_index_sequence(compressed, count, stride)?,
-            other => anyhow::bail!("unsupported EXT_meshopt_compression mode: {other}"),
-        };
-        apply_meshopt_filter(
-            &mut bytes,
+        let bytes = decode_meshopt_buffer(
+            compressed,
+            count,
             stride,
+            mode,
             extension_string_or(extension, "filter", "NONE"),
         )?;
         decoded.insert(view.index(), bytes);
@@ -521,6 +541,64 @@ fn apply_meshopt_filter(bytes: &mut [u8], stride: usize, filter: &str) -> Result
                 meshopt_rs::vertex::filter::decode_filter_quat(std::slice::from_mut(&mut value));
                 for (component, raw) in value.iter().zip(chunk.chunks_exact_mut(2)) {
                     raw.copy_from_slice(&component.to_le_bytes());
+                }
+            }
+            Ok(())
+        }
+        "COLOR" if stride == 4 || stride == 8 => {
+            let component_bytes = stride / 4;
+            for chunk in bytes.chunks_exact_mut(stride) {
+                let alpha = if component_bytes == 1 {
+                    chunk[3] as u32
+                } else {
+                    u16::from_le_bytes([chunk[6], chunk[7]]) as u32
+                };
+                let mut alpha_scale = alpha;
+                alpha_scale |= alpha_scale >> 1;
+                alpha_scale |= alpha_scale >> 2;
+                alpha_scale |= alpha_scale >> 4;
+                if component_bytes == 2 {
+                    alpha_scale |= alpha_scale >> 8;
+                }
+                anyhow::ensure!(
+                    alpha_scale != 0,
+                    "meshopt color alpha scale must not be zero"
+                );
+                let (y, co, cg) = if component_bytes == 1 {
+                    (
+                        chunk[0] as i32,
+                        chunk[1] as i8 as i32,
+                        chunk[2] as i8 as i32,
+                    )
+                } else {
+                    (
+                        u16::from_le_bytes([chunk[0], chunk[1]]) as i32,
+                        i16::from_le_bytes([chunk[2], chunk[3]]) as i32,
+                        i16::from_le_bytes([chunk[4], chunk[5]]) as i32,
+                    )
+                };
+                let alpha_value = (((alpha << 1) & alpha_scale) | (alpha & 1)) as i32;
+                let red = y + co - cg;
+                let green = y + cg;
+                let blue = y - co - cg;
+                let max = if component_bytes == 1 { 255.0 } else { 65535.0 };
+                let scale = max / alpha_scale as f32;
+                let encode = |value: i32| (value as f32 * scale + 0.5) as u32;
+                let values = [
+                    encode(red),
+                    encode(green),
+                    encode(blue),
+                    encode(alpha_value),
+                ];
+                if component_bytes == 1 {
+                    for (target, value) in chunk.iter_mut().zip(values) {
+                        *target = value as u8;
+                    }
+                } else {
+                    for (index, value) in values.into_iter().enumerate() {
+                        chunk[index * 2..index * 2 + 2]
+                            .copy_from_slice(&(value as u16).to_le_bytes());
+                    }
                 }
             }
             Ok(())
@@ -897,6 +975,15 @@ mod tests {
         encoded_vertices.truncate(encoded_vertex_len);
         let decoded_vertices =
             super::decode_meshopt_vertices(&encoded_vertices, vertices.len(), 12).unwrap();
+        let decoded_via_mode = super::decode_meshopt_buffer(
+            &encoded_vertices,
+            vertices.len(),
+            12,
+            "ATTRIBUTES",
+            "NONE",
+        )
+        .unwrap();
+        assert_eq!(decoded_vertices, decoded_via_mode);
         assert_eq!(decoded_vertices.len(), std::mem::size_of_val(&vertices));
         for (actual, expected) in decoded_vertices
             .chunks_exact(4)
@@ -942,5 +1029,9 @@ mod tests {
             decoded_sequence,
             [0, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0, 9, 0, 0, 0]
         );
+
+        let mut encoded_color = [100_u8, 10, 251, 255];
+        super::apply_meshopt_filter(&mut encoded_color, 4, "COLOR").unwrap();
+        assert_eq!(encoded_color, [115, 95, 95, 255]);
     }
 }

@@ -103,7 +103,7 @@ SkinnedMesh/SkeletonとAnimationMixerを生成し、標準WebGPURendererで描�
 ゲームをそのまま動かすには、完全なテクスチャ・マテリアル、DOM/WebGPU API
 バインディング、入力・音声、GPU Driven Culling、Indirect Draw、glTF/KTX2の
 完全な直接VRAM転送を引き続き実装する必要があります。現時点のGLTFLoader fixtureは
-embedded buffer、GLB、外部buffer、PNG画像テクスチャまで検証済みで、KTX2/Basis、DRACO/Meshoptは未完了です。
+embedded buffer、GLB、外部buffer、PNG画像テクスチャ、Meshopt圧縮glTFまで検証済みで、KTX2/Basis、DRACOは未完了です。
 
 Three.js互換を標準WebGPUレンダラーまで拡張する再設計と段階計画は
 [`docs/threejs-compatibility-architecture.md`](docs/threejs-compatibility-architecture.md)

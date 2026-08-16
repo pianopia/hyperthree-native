@@ -193,11 +193,14 @@ impl Renderer {
             .context("no compatible native GPU adapter found")?;
         log::info!("using GPU adapter: {}", adapter.get_info().name);
 
+        let compression_features = wgpu::Features::TEXTURE_COMPRESSION_BC
+            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+            | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("hyperthree-device"),
-                    required_features: wgpu::Features::empty(),
+                    required_features: adapter.features() & compression_features,
                     required_limits: wgpu::Limits::default(),
                 },
                 None,
@@ -431,6 +434,7 @@ impl Renderer {
             queue.clone(),
             surface.clone(),
             config.clone(),
+            device.features(),
         );
 
         Ok(Self {

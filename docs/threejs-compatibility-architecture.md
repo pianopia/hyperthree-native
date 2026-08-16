@@ -98,7 +98,14 @@ KTX2/Basis、DRACO/Meshopt、texture readback、未実装の標準WebGPU APIを
 EXPONENTIALフィルタを含む圧縮・復元ラウンドトリップをテスト済みである。圧縮ビューを
 使わない資産は従来のgltf-rs readerへフォールバックするため、sparse accessorなどの
 既存挙動を不用意に狭めない。なお、これはネイティブAssetStore経路の対応であり、
-Three.js側の`GLTFLoader`へMeshoptDecoderを自動注入する層、DRACO、KTX2/Basisは未完了である。
+Three.js側の`GLTFLoader`へnative MeshoptDecoderを自動注入し、属性・三角形インデックスの
+圧縮glTFを標準`loadAsync()`で読み込むfixtureまで検証済みである。DRACO、KTX2/Basisは未完了である。
+
+WebGPU側は、実GPUが提供するBC/ETC2/ASTC圧縮機能を`GPUAdapter.features`/`GPUDevice.features`
+へ公開し、Three.jsの圧縮テクスチャ経路が使う形式名をwgpuへ変換する。`queue.writeTexture()`
+は圧縮ブロックのbytesPerRowとmipLevelを保持してネイティブへ渡す。これによりKTX2の
+非Basis raw mipデータを受ける土台はできたが、BasisLZ/UASTCのKTX2コンテナを自動transcode
+する処理とfixtureは次段階である。
 
 ### Phase B: Three.js renderer実行
 

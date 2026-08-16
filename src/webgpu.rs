@@ -19,6 +19,7 @@ pub struct NativeWebGpuContext {
     queue: Arc<wgpu::Queue>,
     surface: Arc<wgpu::Surface<'static>>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
+    features: wgpu::Features,
     presented_this_frame: AtomicBool,
     device_events: Arc<DeviceEvents>,
     resources: Mutex<Resources>,
@@ -68,6 +69,7 @@ struct TextureCreateInfo<'a> {
 
 struct TextureWriteInfo {
     id: u64,
+    mip_level: u32,
     width: u32,
     height: u32,
     depth: u32,
@@ -245,6 +247,7 @@ impl NativeWebGpuContext {
         queue: Arc<wgpu::Queue>,
         surface: Arc<wgpu::Surface<'static>>,
         surface_config: wgpu::SurfaceConfiguration,
+        features: wgpu::Features,
     ) -> SharedNativeWebGpuContext {
         let device_events = Arc::new(DeviceEvents::default());
         let lost_events = Arc::clone(&device_events);
@@ -270,6 +273,7 @@ impl NativeWebGpuContext {
             queue,
             surface,
             surface_config: Mutex::new(surface_config),
+            features,
             presented_this_frame: AtomicBool::new(false),
             device_events,
             resources: Mutex::new(Resources {
@@ -281,6 +285,29 @@ impl NativeWebGpuContext {
 
     pub fn take_presented_this_frame(&self) -> bool {
         self.presented_this_frame.swap(false, Ordering::AcqRel)
+    }
+
+    fn webgpu_feature_names(&self) -> Vec<&'static str> {
+        let mut features = Vec::new();
+        if self
+            .features
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
+            features.push("texture-compression-bc");
+        }
+        if self
+            .features
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+        {
+            features.push("texture-compression-etc2");
+        }
+        if self
+            .features
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+        {
+            features.push("texture-compression-astc");
+        }
+        features
     }
 
     /// Returns the native loss record after wgpu has reported a device loss.
@@ -503,7 +530,7 @@ impl NativeWebGpuContext {
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture,
-                mip_level: 0,
+                mip_level: info.mip_level,
                 origin: wgpu::Origin3d {
                     x: info.origin[0],
                     y: info.origin[1],
@@ -1507,6 +1534,12 @@ pub fn register_bindings(
     let Some(gpu) = gpu else {
         return Ok(());
     };
+    let feature_names = gpu
+        .webgpu_feature_names()
+        .into_iter()
+        .map(|feature| format!("'{feature}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let create_buffer_gpu = gpu.clone();
     register(
@@ -1623,7 +1656,7 @@ pub fn register_bindings(
     register(
         context,
         "__hyperthreeWebGpuWriteTexture",
-        8,
+        9,
         move |_this, args, context| {
             let id = number_arg(args, 0, context)? as u64;
             let width = number_arg(args, 1, context)? as u32;
@@ -1634,11 +1667,13 @@ pub fn register_bindings(
             let rows_per_image =
                 optional_number_arg(args, 5, context)?.unwrap_or(height as f64) as u32;
             let origin = optional_u32_array_arg(args, 6, context)?.unwrap_or([0, 0, 0]);
-            let bytes = byte_array_arg(args, 7, context)?;
+            let mip_level = optional_number_arg(args, 7, context)?.unwrap_or(0.0) as u32;
+            let bytes = byte_array_arg(args, 8, context)?;
             write_texture_gpu
                 .write_texture(
                     TextureWriteInfo {
                         id,
+                        mip_level,
                         width,
                         height,
                         depth,
@@ -1992,8 +2027,9 @@ pub fn register_bindings(
         },
     )?;
 
+    let bootstrap = WEBGPU_BOOTSTRAP.replace("__HYPERTHREE_FEATURES__", &feature_names);
     context
-        .eval(boa_engine::Source::from_bytes(WEBGPU_BOOTSTRAP))
+        .eval(boa_engine::Source::from_bytes(bootstrap.as_bytes()))
         .map(|_| ())
         .map_err(|error| anyhow::anyhow!("failed to install native WebGPU objects: {error}"))
 }
@@ -3115,7 +3151,74 @@ fn texture_format(format: &str) -> wgpu::TextureFormat {
         "depth24plus" => wgpu::TextureFormat::Depth24Plus,
         "depth24plus-stencil8" => wgpu::TextureFormat::Depth24PlusStencil8,
         "depth32float" => wgpu::TextureFormat::Depth32Float,
+        "bc1-rgba-unorm" => wgpu::TextureFormat::Bc1RgbaUnorm,
+        "bc1-rgba-unorm-srgb" => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+        "bc2-rgba-unorm" => wgpu::TextureFormat::Bc2RgbaUnorm,
+        "bc2-rgba-unorm-srgb" => wgpu::TextureFormat::Bc2RgbaUnormSrgb,
+        "bc3-rgba-unorm" => wgpu::TextureFormat::Bc3RgbaUnorm,
+        "bc3-rgba-unorm-srgb" => wgpu::TextureFormat::Bc3RgbaUnormSrgb,
+        "bc4-r-unorm" => wgpu::TextureFormat::Bc4RUnorm,
+        "bc4-r-snorm" => wgpu::TextureFormat::Bc4RSnorm,
+        "bc5-rg-unorm" => wgpu::TextureFormat::Bc5RgUnorm,
+        "bc5-rg-snorm" => wgpu::TextureFormat::Bc5RgSnorm,
+        "bc6h-rgb-ufloat" => wgpu::TextureFormat::Bc6hRgbUfloat,
+        "bc6h-rgb-float" => wgpu::TextureFormat::Bc6hRgbFloat,
+        "bc7-rgba-unorm" => wgpu::TextureFormat::Bc7RgbaUnorm,
+        "bc7-rgba-unorm-srgb" => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+        "etc2-rgb8unorm" => wgpu::TextureFormat::Etc2Rgb8Unorm,
+        "etc2-rgb8unorm-srgb" => wgpu::TextureFormat::Etc2Rgb8UnormSrgb,
+        "etc2-rgb8a1unorm" => wgpu::TextureFormat::Etc2Rgb8A1Unorm,
+        "etc2-rgb8a1unorm-srgb" => wgpu::TextureFormat::Etc2Rgb8A1UnormSrgb,
+        "etc2-rgba8unorm" => wgpu::TextureFormat::Etc2Rgba8Unorm,
+        "etc2-rgba8unorm-srgb" => wgpu::TextureFormat::Etc2Rgba8UnormSrgb,
+        "eac-r11unorm" => wgpu::TextureFormat::EacR11Unorm,
+        "eac-r11snorm" => wgpu::TextureFormat::EacR11Snorm,
+        "eac-rg11unorm" => wgpu::TextureFormat::EacRg11Unorm,
+        "eac-rg11snorm" => wgpu::TextureFormat::EacRg11Snorm,
+        format if format.starts_with("astc-") => astc_texture_format(format),
         _ => wgpu::TextureFormat::Rgba8Unorm,
+    }
+}
+
+fn astc_texture_format(format: &str) -> wgpu::TextureFormat {
+    let (block, srgb) = match format {
+        "astc-4x4-unorm" => (wgpu::AstcBlock::B4x4, false),
+        "astc-4x4-unorm-srgb" => (wgpu::AstcBlock::B4x4, true),
+        "astc-5x4-unorm" => (wgpu::AstcBlock::B5x4, false),
+        "astc-5x4-unorm-srgb" => (wgpu::AstcBlock::B5x4, true),
+        "astc-5x5-unorm" => (wgpu::AstcBlock::B5x5, false),
+        "astc-5x5-unorm-srgb" => (wgpu::AstcBlock::B5x5, true),
+        "astc-6x5-unorm" => (wgpu::AstcBlock::B6x5, false),
+        "astc-6x5-unorm-srgb" => (wgpu::AstcBlock::B6x5, true),
+        "astc-6x6-unorm" => (wgpu::AstcBlock::B6x6, false),
+        "astc-6x6-unorm-srgb" => (wgpu::AstcBlock::B6x6, true),
+        "astc-8x5-unorm" => (wgpu::AstcBlock::B8x5, false),
+        "astc-8x5-unorm-srgb" => (wgpu::AstcBlock::B8x5, true),
+        "astc-8x6-unorm" => (wgpu::AstcBlock::B8x6, false),
+        "astc-8x6-unorm-srgb" => (wgpu::AstcBlock::B8x6, true),
+        "astc-8x8-unorm" => (wgpu::AstcBlock::B8x8, false),
+        "astc-8x8-unorm-srgb" => (wgpu::AstcBlock::B8x8, true),
+        "astc-10x5-unorm" => (wgpu::AstcBlock::B10x5, false),
+        "astc-10x5-unorm-srgb" => (wgpu::AstcBlock::B10x5, true),
+        "astc-10x6-unorm" => (wgpu::AstcBlock::B10x6, false),
+        "astc-10x6-unorm-srgb" => (wgpu::AstcBlock::B10x6, true),
+        "astc-10x8-unorm" => (wgpu::AstcBlock::B10x8, false),
+        "astc-10x8-unorm-srgb" => (wgpu::AstcBlock::B10x8, true),
+        "astc-10x10-unorm" => (wgpu::AstcBlock::B10x10, false),
+        "astc-10x10-unorm-srgb" => (wgpu::AstcBlock::B10x10, true),
+        "astc-12x10-unorm" => (wgpu::AstcBlock::B12x10, false),
+        "astc-12x10-unorm-srgb" => (wgpu::AstcBlock::B12x10, true),
+        "astc-12x12-unorm" => (wgpu::AstcBlock::B12x12, false),
+        "astc-12x12-unorm-srgb" => (wgpu::AstcBlock::B12x12, true),
+        _ => return wgpu::TextureFormat::Rgba8Unorm,
+    };
+    wgpu::TextureFormat::Astc {
+        block,
+        channel: if srgb {
+            wgpu::AstcChannel::UnormSrgb
+        } else {
+            wgpu::AstcChannel::Unorm
+        },
     }
 }
 
@@ -3340,6 +3443,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           dataLayout.bytesPerRow ?? normalizedSize.width * 4,
           dataLayout.rowsPerImage ?? normalizedSize.height,
           JSON.stringify([origin.x ?? 0, origin.y ?? 0, origin.z ?? 0]),
+          destination.mipLevel ?? 0,
           bytes,
         );
       },
@@ -3368,6 +3472,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           width * 4,
           height,
           JSON.stringify([origin.x ?? 0, origin.y ?? 0, origin.z ?? 0]),
+          destination.mipLevel ?? 0,
           bytes,
         );
       },
@@ -3376,7 +3481,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     };
     const device = {
       queue,
-      features: new Set(),
+      features: new Set([__HYPERTHREE_FEATURES__]),
       limits: {},
       createBuffer: makeBuffer,
       createTexture: makeTexture,
@@ -3504,7 +3609,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
   };
   const adapter = {
     name: 'HyperThree Native wgpu',
-    features: new Set(),
+    features: new Set([__HYPERTHREE_FEATURES__]),
     limits: {},
     isFallbackAdapter: false,
     requestDevice: async () => makeDevice(),
@@ -3526,7 +3631,7 @@ const WEBGPU_BOOTSTRAP: &str = r#"
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_wgsl;
+    use super::{sanitize_wgsl, texture_format};
 
     #[test]
     fn removes_unsupported_wgsl_diagnostic_directives() {
@@ -3553,5 +3658,24 @@ mod tests {
         let source = "let level = u32( 0.0 ); let layer = i32( 1.0 );";
 
         assert_eq!(sanitize_wgsl(source), "let level = 0u; let layer = 1i;");
+    }
+
+    #[test]
+    fn maps_three_compressed_texture_formats_to_native_formats() {
+        assert_eq!(
+            texture_format("bc7-rgba-unorm-srgb"),
+            wgpu::TextureFormat::Bc7RgbaUnormSrgb
+        );
+        assert_eq!(
+            texture_format("etc2-rgba8unorm"),
+            wgpu::TextureFormat::Etc2Rgba8Unorm
+        );
+        assert_eq!(
+            texture_format("astc-4x4-unorm-srgb"),
+            wgpu::TextureFormat::Astc {
+                block: wgpu::AstcBlock::B4x4,
+                channel: wgpu::AstcChannel::UnormSrgb,
+            }
+        );
     }
 }

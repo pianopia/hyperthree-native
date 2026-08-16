@@ -1,5 +1,5 @@
 use crate::{
-    asset::AssetStore,
+    asset::{decode_meshopt_buffer, AssetStore},
     bridge::{GeometryKind, MaterialSnapshot, SharedInputState, SharedRenderState},
     webgpu::SharedNativeWebGpuContext,
 };
@@ -796,6 +796,43 @@ impl JsRuntime {
             .map_err(|error| anyhow::anyhow!("failed to register asset fetch binding: {error}"))?;
 
         context
+            .register_global_builtin_callable(js_string!("__hyperthreeDecodeMeshopt"), 5, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = byte_array_value(args.get_or_undefined(0), context)?;
+                    let count = nonnegative_usize_arg(args, 1, context)?;
+                    let stride = nonnegative_usize_arg(args, 2, context)?;
+                    let mode = string_arg(args, 3, context)?;
+                    let filter_value = args.get_or_undefined(4);
+                    let filter = if filter_value.is_undefined() || filter_value.is_null() {
+                        "NONE".to_string()
+                    } else {
+                        filter_value
+                            .to_string(context)
+                            .map_err(|_| {
+                                JsNativeError::typ().with_message("meshopt filter is invalid")
+                            })?
+                            .to_std_string_escaped()
+                    };
+                    let decoded = decode_meshopt_buffer(&source, count, stride, &mode, &filter)
+                        .map_err(|error| {
+                            JsNativeError::error().with_message(format!(
+                                "{error} (source={}, count={count}, stride={stride}, mode={mode}, filter={filter})",
+                                source.len()
+                            ))
+                        })?;
+                    let block = AlignedVec::from_iter(0, decoded);
+                    JsArrayBuffer::from_byte_block(block, context)
+                        .map(Into::into)
+                        .map_err(|error| {
+                            JsNativeError::error()
+                                .with_message(format!("failed to create meshopt buffer: {error}"))
+                                .into()
+                        })
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register meshopt binding: {error}"))?;
+
+        context
             .register_global_builtin_callable(js_string!("__hyperthreeDecodeImage"), 1, unsafe {
                 NativeFunction::from_closure(move |_this, args, context| {
                     let source = args.get_or_undefined(0).to_object(context).map_err(|_| {
@@ -1056,6 +1093,18 @@ impl JsRuntime {
                   Object.setPrototypeOf(bitmap, ImageBitmap.prototype);
                   return bitmap;
                 });
+                globalThis.__hyperthreeMeshoptDecoder = globalThis.__hyperthreeMeshoptDecoder || {
+                  supported: true,
+                  ready: Promise.resolve(),
+                  useWorkers() {},
+                  decodeGltfBufferAsync(count, stride, source, mode, filter = 'NONE') {
+                    return Promise.resolve(new Uint8Array(__hyperthreeDecodeMeshopt(source, count, stride, mode, filter)));
+                  },
+                  decodeGltfBuffer(target, count, stride, source, mode, filter = 'NONE') {
+                    const decoded = new Uint8Array(__hyperthreeDecodeMeshopt(source, count, stride, mode, filter));
+                    target.set(decoded);
+                  },
+                };
                 const decodeDataUrl = (url) => {
                   const comma = url.indexOf(',');
                   if (comma < 0) throw new TypeError(`invalid data URL: ${url}`);
@@ -1236,6 +1285,25 @@ fn normalize_three_compatibility_source(source: &str) -> std::borrow::Cow<'_, st
         if normalized.contains("let of=") {
             normalized = normalized.replace("let of=", "var of=");
             boa_changed = true;
+        }
+        for (from, to) in [
+            (
+                "this.meshoptDecoder = null;",
+                "this.meshoptDecoder = globalThis.__hyperthreeMeshoptDecoder || null;",
+            ),
+            (
+                "this.meshoptDecoder=null;",
+                "this.meshoptDecoder=globalThis.__hyperthreeMeshoptDecoder||null;",
+            ),
+            (
+                "this.meshoptDecoder=null,",
+                "this.meshoptDecoder=globalThis.__hyperthreeMeshoptDecoder||null,",
+            ),
+        ] {
+            if normalized.contains(from) {
+                normalized = normalized.replace(from, to);
+                boa_changed = true;
+            }
         }
     }
     if (is_three_loader_bundle && boa_changed) || normalized != source {
@@ -1768,6 +1836,64 @@ mod tests {
             normalize_three_compatibility_source(source),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn injects_native_meshopt_decoder_into_three_loader() {
+        let source =
+            "/* GLTFLoader */ class GLTFLoader{constructor(){this.meshoptDecoder = null;}}";
+        let normalized = normalize_three_compatibility_source(source);
+        assert!(normalized
+            .contains("this.meshoptDecoder = globalThis.__hyperthreeMeshoptDecoder || null;"));
+        let minified =
+            "/* GLTFLoader */ class GLTFLoader{constructor(){this.meshoptDecoder=null;}}";
+        let normalized = normalize_three_compatibility_source(minified);
+        assert!(
+            normalized.contains("this.meshoptDecoder=globalThis.__hyperthreeMeshoptDecoder||null;")
+        );
+        let bundled = "/* GLTFLoader */ class GLTFLoader{constructor(){super(),this.meshoptDecoder=null,this.pluginCallbacks=[]}}";
+        let normalized = normalize_three_compatibility_source(bundled);
+        assert!(
+            normalized.contains("this.meshoptDecoder=globalThis.__hyperthreeMeshoptDecoder||null,")
+        );
+    }
+
+    #[cfg(any())]
+    #[test]
+    fn native_meshopt_binding_decodes_a_typed_array() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                "globalThis.__meshoptProbe = __hyperthreeDecodeMeshopt(new Uint8Array([160,0,0,1,60,0,0,0,255,255,1,60,0,0,0,126,125,0,0,1,12,0,0,0,255,1,12,0,0,0,126,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]), 3, 12, 'ATTRIBUTES', 'NONE');",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn native_meshopt_binding_decodes_fetched_bytes() {
+        let render_state = NativeRenderState::shared();
+        let input_state = NativeInputState::shared();
+        let root = std::env::current_dir().unwrap();
+        let mut runtime = JsRuntime::new(render_state, input_state, root).unwrap();
+        runtime
+            .execute_source(
+                r#"
+                globalThis.__meshoptProbe = false;
+                fetch('data:application/octet-stream;base64,oAAAATwAAAD//wE8AAAAfn0AAAEMAAAA/wEMAAAAfgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==')
+                  .then((response) => response.arrayBuffer())
+                  .then((buffer) => {
+                    const decoded = __hyperthreeDecodeMeshopt(new Uint8Array(buffer), 3, 12, 'ATTRIBUTES', 'NONE');
+                    globalThis.__meshoptProbe = decoded.byteLength === 36;
+                  });
+                "#,
+            )
+            .unwrap();
+        runtime
+            .execute_source("if (globalThis.__meshoptProbe !== true) throw new Error('meshopt binding probe failed');")
+            .unwrap();
     }
 
     #[test]

@@ -42,8 +42,9 @@
 - [x] Three.js texture-array `textureLoad` LOD WGSL normalization for current Naga
 - [x] Native AssetStore `EXT_meshopt_compression` attribute/triangle/index-sequence decode with filters
 - [ ] Complete canvas resize/device-loss/present lifecycle for Three.js WebGPURenderer
+- [x] Three.js WebGPU compressed texture format negotiation and mip-level uploads
 - [ ] Three.js WebGPU renderer bindings for textures, materials, and command objects
-- [ ] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
+- [x] Three.js GLTFLoader MeshoptDecoder injection and compressed asset end-to-end fixture
 - [ ] KTX2/Basis native transcode and GPU texture upload
 - [ ] DRACO native decode and full material/animation GPU upload
 - [ ] GPU-driven culling, indirect draw, and large-scene benchmark suite

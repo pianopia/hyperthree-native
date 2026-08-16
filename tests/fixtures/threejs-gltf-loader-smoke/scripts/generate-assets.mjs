@@ -105,3 +105,63 @@ const binHeader = Buffer.alloc(8);
 binHeader.writeUInt32LE(bin.length, 0);
 binHeader.writeUInt32LE(0x004e4942, 4);
 await writeFile(new URL("scene.glb", generated), Buffer.concat([header, jsonHeader, json, jsonPadding, binHeader, bin]));
+
+const meshoptVertices = Buffer.from(
+  "oAAAATwAAAD//wE8AAAAfn0AAAEMAAAA/wEMAAAAfgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+  "base64",
+);
+const meshoptIndices = Buffer.from("4fAAdodWZ3iphmWJaJgBaQAA", "base64");
+const meshoptSource = Buffer.concat([meshoptVertices, meshoptIndices]);
+const meshoptDocument = {
+  asset: { version: "2.0" },
+  extensionsUsed: ["EXT_meshopt_compression"],
+  extensionsRequired: ["EXT_meshopt_compression"],
+  buffers: [
+    { byteLength: meshoptSource.length, uri: "scene-meshopt.bin" },
+    { byteLength: 42, uri: "scene-meshopt-fallback.bin" },
+  ],
+  bufferViews: [
+    {
+      buffer: 1,
+      byteOffset: 0,
+      byteLength: 36,
+      extensions: {
+        EXT_meshopt_compression: {
+          buffer: 0,
+          byteOffset: 0,
+          byteLength: meshoptVertices.length,
+          byteStride: 12,
+          count: 3,
+          mode: "ATTRIBUTES",
+          filter: "NONE",
+        },
+      },
+    },
+    {
+      buffer: 1,
+      byteOffset: 36,
+      byteLength: 6,
+      extensions: {
+        EXT_meshopt_compression: {
+          buffer: 0,
+          byteOffset: meshoptVertices.length,
+          byteLength: meshoptIndices.length,
+          byteStride: 2,
+          count: 3,
+          mode: "TRIANGLES",
+        },
+      },
+    },
+  ],
+  accessors: [
+    { bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [-0.6, 0, 0], max: [0.6, 1.2, 0] },
+    { bufferView: 1, componentType: 5123, count: 3, type: "SCALAR" },
+  ],
+  meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }],
+  nodes: [{ mesh: 0 }],
+  scenes: [{ nodes: [0] }],
+  scene: 0,
+};
+await writeFile(new URL("scene-meshopt.bin", generated), meshoptSource);
+await writeFile(new URL("scene-meshopt-fallback.bin", generated), Buffer.alloc(42));
+await writeFile(new URL("scene-meshopt.gltf", generated), JSON.stringify(meshoptDocument, null, 2));

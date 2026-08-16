@@ -74,6 +74,7 @@ globalThis.__gltfSmokeLoaded = false;
 globalThis.__gltfSmokeRendered = false;
 globalThis.__gltfExternalTexture = false;
 globalThis.__gltfGlbLoaded = false;
+globalThis.__gltfMeshoptLoaded = false;
 globalThis.__gltfFeatureSmoke = false;
 globalThis.__gltfBatchedSmoke = false;
 globalThis.__gltfShadowSmoke = false;
@@ -162,10 +163,11 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
   const loader = new GLTFLoader();
-  const [gltf, externalGltf, glb] = await Promise.all([
+  const [gltf, externalGltf, glb, meshoptGltf] = await Promise.all([
     loader.loadAsync("public/scene.gltf"),
     loader.loadAsync("public/generated/scene-external.gltf"),
     loader.loadAsync("public/generated/scene.glb"),
+    loader.loadAsync("public/generated/scene-meshopt.gltf"),
   ]);
   globalThis.__gltfSmokeStage = "after-gltf-load";
   const skinned = gltf.scene.getObjectByProperty("isSkinnedMesh", true);
@@ -183,6 +185,11 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
     textured.material.map.image.data?.byteLength === 4,
   );
   globalThis.__gltfGlbLoaded = glb.scene.children.length === 1 && glb.animations.length === 1;
+  const meshoptMesh = meshoptGltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfMeshoptLoaded = Boolean(
+    meshoptMesh?.geometry?.attributes?.position?.count === 3 &&
+    meshoptMesh.geometry.index?.count === 3,
+  );
   if (!globalThis.__gltfExternalTexture) throw new Error("external glTF image texture did not decode");
   if (!globalThis.__gltfGlbLoaded) throw new Error("GLB container did not load through GLTFLoader");
   scene.add(gltf.scene);
@@ -201,7 +208,7 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   globalThis.__gltfBatchedSmoke = batched.isBatchedMesh === true;
   globalThis.__gltfShadowSmoke = directionalLight.castShadow === true && directionalLight.shadow.mapSize.x === 256;
   globalThis.__gltfSmokeReady = true;
-  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded ||
+  if (!globalThis.__gltfSmokeLoaded || !globalThis.__gltfExternalTexture || !globalThis.__gltfGlbLoaded || !globalThis.__gltfMeshoptLoaded ||
       !globalThis.__gltfResizeEvent || !globalThis.__gltfFeatureSmoke || !globalThis.__gltfBatchedSmoke ||
       !globalThis.__gltfShadowSmoke || !globalThis.__gltfEnvironmentSmoke || !globalThis.__gltfMrtSmoke ||
       !globalThis.__gltfIndirectSmoke || !globalThis.__gltfReadbackSmoke || !globalThis.__gltfResourceLifecycleSmoke) {
