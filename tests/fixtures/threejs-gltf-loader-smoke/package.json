@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/generate-assets.mjs",
     "build": "vite build"
   },
   "dependencies": {

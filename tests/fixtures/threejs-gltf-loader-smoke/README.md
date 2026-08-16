@@ -2,8 +2,9 @@
 
 This fixture verifies the standard Three.js loading path rather than the
 native `drawAsset()` shortcut. It loads a project-relative glTF with an
-embedded buffer, creates a `SkinnedMesh` and `Skeleton`, advances an
-`AnimationMixer`, and renders the result with `WebGPURenderer`.
+embedded buffer, an external-buffer glTF with an external PNG texture, and a
+GLB with an embedded PNG texture. It creates `SkinnedMesh`/`Skeleton` objects,
+advances an `AnimationMixer`, and renders the result with `WebGPURenderer`.
 
 From the repository root:
 
@@ -13,6 +14,7 @@ npm run build --prefix tests/fixtures/threejs-gltf-loader-smoke
 cargo run -- run --project tests/fixtures/threejs-gltf-loader-smoke --skip-build
 ```
 
-The native host must have a visible GPU backend. The fixture fails during
-startup if loading, skin creation, animation setup, or the WebGPU render does
-not settle.
+The native host must have a visible GPU backend. The fixture generates its
+binary assets during `npm run build` and fails during startup if GLTFLoader,
+external-buffer/image loading, skin creation, animation setup, GLB parsing, or
+the WebGPU render does not settle.

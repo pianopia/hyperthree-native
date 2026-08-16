@@ -14,6 +14,7 @@ pub struct NativeWebGpuContext {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: Arc<wgpu::Surface<'static>>,
+    surface_config: Mutex<wgpu::SurfaceConfiguration>,
     presented_this_frame: AtomicBool,
     resources: Mutex<Resources>,
 }
@@ -217,11 +218,13 @@ impl NativeWebGpuContext {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface: Arc<wgpu::Surface<'static>>,
+        surface_config: wgpu::SurfaceConfiguration,
     ) -> SharedNativeWebGpuContext {
         Arc::new(Self {
             device,
             queue,
             surface,
+            surface_config: Mutex::new(surface_config),
             presented_this_frame: AtomicBool::new(false),
             resources: Mutex::new(Resources {
                 next_id: 1,
@@ -232,6 +235,20 @@ impl NativeWebGpuContext {
 
     pub fn take_presented_this_frame(&self) -> bool {
         self.presented_this_frame.swap(false, Ordering::AcqRel)
+    }
+
+    pub fn resize_surface(&self, width: u32, height: u32) -> Result<(), String> {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        let mut config = self
+            .surface_config
+            .lock()
+            .map_err(|_| "WebGPU surface configuration poisoned".to_string())?;
+        config.width = width;
+        config.height = height;
+        self.surface.configure(&self.device, &config);
+        Ok(())
     }
 
     fn allocate_id(&self) -> Result<u64, String> {
@@ -1402,6 +1419,21 @@ pub fn register_bindings(
             current_texture_gpu
                 .get_current_surface_texture()
                 .map(JsValue::from)
+                .map_err(native_error)
+        },
+    )?;
+
+    let resize_canvas_gpu = gpu.clone();
+    register(
+        context,
+        "__hyperthreeWebGpuResizeCanvas",
+        2,
+        move |_this, args, context| {
+            let width = number_arg(args, 0, context)? as u32;
+            let height = number_arg(args, 1, context)? as u32;
+            resize_canvas_gpu
+                .resize_surface(width, height)
+                .map(|_| JsValue::undefined())
                 .map_err(native_error)
         },
     )?;
@@ -2812,17 +2844,29 @@ const WEBGPU_BOOTSTRAP: &str = r#"
     getCurrentTexture: makeSurfaceTexture,
   };
   const nativeCanvas = {
-    width: 1280,
-    height: 720,
     style: {},
     clientWidth: 1280,
     clientHeight: 720,
     getContext(type) { return type === 'webgpu' ? canvasContext : null; },
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, listener) { globalThis.addEventListener(type, listener); },
+    removeEventListener(type, listener) { globalThis.removeEventListener(type, listener); },
     setAttribute() {},
     getAttribute() { return null; },
   };
+  let canvasWidth = 1280;
+  let canvasHeight = 720;
+  Object.defineProperties(nativeCanvas, {
+    width: {
+      configurable: true,
+      get: () => canvasWidth,
+      set: value => { canvasWidth = Math.max(1, Math.floor(Number(value) || 1)); __hyperthreeWebGpuResizeCanvas(canvasWidth, canvasHeight); },
+    },
+    height: {
+      configurable: true,
+      get: () => canvasHeight,
+      set: value => { canvasHeight = Math.max(1, Math.floor(Number(value) || 1)); __hyperthreeWebGpuResizeCanvas(canvasWidth, canvasHeight); },
+    },
+  });
   Object.setPrototypeOf(nativeCanvas, HTMLCanvasElement.prototype);
   globalThis.__hyperthreeNativeCanvas = nativeCanvas;
   globalThis.document = globalThis.document || {
@@ -2900,6 +2944,34 @@ const WEBGPU_BOOTSTRAP: &str = r#"
           normalizedSize.depthOrArrayLayers ?? 1,
           dataLayout.bytesPerRow ?? normalizedSize.width * 4,
           dataLayout.rowsPerImage ?? normalizedSize.height,
+          JSON.stringify([origin.x ?? 0, origin.y ?? 0, origin.z ?? 0]),
+          bytes,
+        );
+      },
+      copyExternalImageToTexture(source, destination, size) {
+        const image = source.source;
+        if (!image || !image.data) throw new TypeError('external image source has no RGBA data');
+        const width = size.width;
+        const height = size.height;
+        const depth = size.depthOrArrayLayers ?? 1;
+        let bytes = image.data;
+        if (source.flipY === true) {
+          const flipped = new Uint8Array(width * height * 4);
+          for (let row = 0; row < height; row += 1) {
+            const sourceOffset = row * width * 4;
+            const targetOffset = (height - row - 1) * width * 4;
+            flipped.set(bytes.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
+          }
+          bytes = flipped;
+        }
+        const origin = destination.origin ?? { x: 0, y: 0, z: 0 };
+        __hyperthreeWebGpuWriteTexture(
+          destination.texture.__hyperthreeHandle,
+          width,
+          height,
+          depth,
+          width * 4,
+          height,
           JSON.stringify([origin.x ?? 0, origin.y ?? 0, origin.z ?? 0]),
           bytes,
         );
@@ -2984,7 +3056,10 @@ const WEBGPU_BOOTSTRAP: &str = r#"
         });
       },
       pushErrorScope() {}, popErrorScope: async () => null,
-      lost: Promise.resolve({ reason: '', message: '' }),
+      // The promise remains pending until the native host reports a real
+      // device-loss event. Resolving it during initialization makes Three.js
+      // treat every healthy device as lost.
+      lost: new Promise(() => {}),
     };
     return device;
   };

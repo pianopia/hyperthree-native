@@ -132,6 +132,8 @@ fn run_native(
     )?;
     runtime.execute_source(include_str!("../js/three-bridge.js"))?;
     runtime.execute_file(&script)?;
+    let initial_size = renderer.window.inner_size();
+    runtime.set_window_size(initial_size.width, initial_size.height)?;
     runtime.execute_start()?;
     log::info!("executed JavaScript entry point: {}", script.display());
     let snapshot = render_state
@@ -170,7 +172,12 @@ fn run_native(
                         }
                         event_loop.exit();
                     }
-                    WindowEvent::Resized(size) => renderer.resize(size),
+                    WindowEvent::Resized(size) => {
+                        renderer.resize(size);
+                        if let Err(error) = runtime.set_window_size(size.width, size.height) {
+                            log::error!("JavaScript resize event failed: {error:#}");
+                        }
+                    }
                     WindowEvent::Focused(false) => {
                         input_state
                             .lock()

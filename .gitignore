@@ -1,5 +1,6 @@
 /target
 **/node_modules/
 **/dist/
+tests/fixtures/threejs-gltf-loader-smoke/public/generated/
 *.swp
 .DS_Store

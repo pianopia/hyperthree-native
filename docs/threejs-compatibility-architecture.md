@@ -72,16 +72,18 @@ swapchainへのpresentまで接続済みである。BoaのThree.js node-cacheが
 変化するTransform、morph target、SkinnedMesh/Skeletonのbone transformを同じ標準Renderer
 経路で検証し、Three.jsが生成するtexture-array `textureLoad`のLOD型を現行Naga向けに
 正規化した。さらにプロジェクト相対`fetch()`、`Request`、`Response`、`Headers`、
-`ArrayBuffer`、`TextDecoder`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
-用意した。`navigator.userAgent`、`console`、data URLも含め、Three.js 0.179の
+`Blob`、`ArrayBuffer`、`TextDecoder`、`createImageBitmap`の互換境界を追加し、GLB／glTFを標準Loaderへ渡す入口を
+用意した。`navigator.userAgent`、`console`、data URL、PNG decode、
+`GPUQueue.copyExternalImageToTexture`も含め、Three.js 0.179の
 標準`GLTFLoader.loadAsync()`でembedded bufferを読み込み、SkinnedMesh/Skeleton、
-AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。Three.js 0.179の
+AnimationMixer、標準WebGPURenderer描画までfixtureで検証済みである。さらにGLB、外部buffer、
+外部PNG、canvas resizeを同じfixtureで検証済みである。Three.js 0.179の
 `MeshStandardNodeMaterial`、TSL `colorNode`、
 `PostProcessing`、`pass()`、Bloomノードも標準`WebGPURenderer`経路でApple M4/Metal上の
 実シーンをスモーク済みである。constructor内lexical bindingを`var`へ限定正規化する
-Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はresize／
-device-lost/present lifecycle、GLB container、画像／KTX2 decode、外部buffer、完全な
-readback、未実装の標準WebGPU APIを段階的に埋める。
+Boa 0.21.1互換層と、JS評価panicをエラーへ変換する保護も追加した。次はdevice-lost／
+present lifecycle、KTX2/Basis、DRACO/Meshopt、完全なreadback、未実装の標準WebGPU APIを
+段階的に埋める。
 
 ### Phase B: Three.js renderer実行
 
@@ -109,7 +111,7 @@ NodeMaterialとpost-processingの標準経路はスモーク済みだが、公�
 Three.js公式のWebGPUサンプルを次のカテゴリで実行する。
 
 1. Standard / Physical material、texture、normal、roughness、metalness
-2. GLTFLoader、AnimationMixer、skin、morph target（embedded bufferのSkinnedMesh/Skeleton smoke済み）
+2. GLTFLoader、AnimationMixer、skin、morph target（embedded/external/GLBとPNG textureのsmoke済み）
 3. InstancedMesh、BatchedMesh、Points、Line、Sprite
 4. TSL/NodeMaterial、compute、post-processing
 5. Shadow、environment map、multiple render target、indirect draw

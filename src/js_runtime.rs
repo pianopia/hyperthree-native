@@ -795,6 +795,46 @@ impl JsRuntime {
             })
             .map_err(|error| anyhow::anyhow!("failed to register asset fetch binding: {error}"))?;
 
+        context
+            .register_global_builtin_callable(js_string!("__hyperthreeDecodeImage"), 1, unsafe {
+                NativeFunction::from_closure(move |_this, args, context| {
+                    let source = args.get_or_undefined(0).to_object(context).map_err(|_| {
+                        JsNativeError::typ().with_message("image source must be a Blob")
+                    })?;
+                    let bytes = source
+                        .get(js_string!("__hyperthreeBytes"), context)
+                        .and_then(|value| byte_array_value(&value, context))?;
+                    let decoded = image::load_from_memory(&bytes).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to decode image bytes: {error}"))
+                    })?;
+                    let rgba = decoded.to_rgba8();
+                    let width = rgba.width();
+                    let height = rgba.height();
+                    let block = AlignedVec::from_iter(0, rgba.into_raw());
+                    let data = JsArrayBuffer::from_byte_block(block, context).map_err(|error| {
+                        JsNativeError::error()
+                            .with_message(format!("failed to create decoded image buffer: {error}"))
+                    })?;
+                    let image = JsObject::with_object_proto(context.intrinsics());
+                    image.set(
+                        js_string!("width"),
+                        JsValue::from(width as f64),
+                        false,
+                        context,
+                    )?;
+                    image.set(
+                        js_string!("height"),
+                        JsValue::from(height as f64),
+                        false,
+                        context,
+                    )?;
+                    image.set(js_string!("data"), data, false, context)?;
+                    Ok(image.into())
+                })
+            })
+            .map_err(|error| anyhow::anyhow!("failed to register image decode binding: {error}"))?;
+
         let asset_draw_store = asset_store;
         let asset_draw_state = render_state;
         context
@@ -883,6 +923,29 @@ impl JsRuntime {
                 globalThis.window = globalThis.window || globalThis;
                 globalThis.self = globalThis.self || globalThis;
                 globalThis.global = globalThis.global || globalThis;
+                globalThis.Event = globalThis.Event || class Event {
+                  constructor(type, init = {}) {
+                    this.type = String(type);
+                    this.bubbles = Boolean(init.bubbles);
+                    this.cancelable = Boolean(init.cancelable);
+                    this.defaultPrevented = false;
+                  }
+                  preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+                };
+                globalThis.__hyperthreeEventListeners = new Map();
+                globalThis.addEventListener = (type, listener) => {
+                  if (typeof listener !== 'function') return;
+                  const listeners = globalThis.__hyperthreeEventListeners.get(type) || new Set();
+                  listeners.add(listener);
+                  globalThis.__hyperthreeEventListeners.set(type, listeners);
+                };
+                globalThis.removeEventListener = (type, listener) => {
+                  globalThis.__hyperthreeEventListeners.get(type)?.delete(listener);
+                };
+                globalThis.dispatchEvent = (event) => {
+                  for (const listener of globalThis.__hyperthreeEventListeners.get(event.type) || []) listener.call(globalThis, event);
+                  return !event.defaultPrevented;
+                };
                 globalThis.console = globalThis.console || {
                   log() {},
                   info() {},
@@ -908,6 +971,41 @@ impl JsRuntime {
                   }
                   get(key) { return this.__values.get(String(key).toLowerCase()) ?? null; }
                   has(key) { return this.__values.has(String(key).toLowerCase()); }
+                };
+                globalThis.Blob = globalThis.Blob || class Blob {
+                  constructor(parts = [], options = {}) {
+                    const chunks = parts.map((part) => {
+                      if (part instanceof ArrayBuffer) return new Uint8Array(part);
+                      if (ArrayBuffer.isView(part)) return new Uint8Array(part.buffer, part.byteOffset || 0, part.byteLength);
+                      if (part && part.__hyperthreeBytes) return part.__hyperthreeBytes;
+                      const text = String(part);
+                      const bytes = new Uint8Array(text.length);
+                      for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index) & 0xff;
+                      return bytes;
+                    });
+                    const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+                    this.__hyperthreeBytes = new Uint8Array(size);
+                    let offset = 0;
+                    for (const chunk of chunks) { this.__hyperthreeBytes.set(chunk, offset); offset += chunk.byteLength; }
+                    this.size = size;
+                    this.type = String(options.type || '').toLowerCase();
+                  }
+                  async arrayBuffer() { return this.__hyperthreeBytes.slice().buffer; }
+                };
+                globalThis.Response = globalThis.Response || class Response {
+                  constructor(body = null, init = {}) {
+                    this._body = body instanceof ArrayBuffer ? body : new Uint8Array(body || []).buffer;
+                    this.url = init.url || '';
+                    this.status = init.status ?? 200;
+                    this.statusText = init.statusText || 'OK';
+                    this.ok = this.status >= 200 && this.status < 300;
+                    this.headers = init.headers || new Headers();
+                    this.body = undefined;
+                  }
+                  async arrayBuffer() { return this._body.slice(0); }
+                  async text() { return new TextDecoder().decode(this._body); }
+                  async json() { return JSON.parse(await this.text()); }
+                  async blob() { return new Blob([this._body], { type: this.headers.get('Content-Type') || '' }); }
                 };
                 globalThis.Request = globalThis.Request || class Request {
                   constructor(input, init = {}) {
@@ -946,6 +1044,18 @@ impl JsRuntime {
                     return value;
                   }
                 };
+                globalThis.ImageBitmap = globalThis.ImageBitmap || function ImageBitmap() {};
+                globalThis.createImageBitmap = globalThis.createImageBitmap || (async (source) => {
+                  const decoded = __hyperthreeDecodeImage(source);
+                  const bitmap = {
+                    width: decoded.width,
+                    height: decoded.height,
+                    data: new Uint8Array(decoded.data),
+                    close() { this.data = new Uint8Array(0); },
+                  };
+                  Object.setPrototypeOf(bitmap, ImageBitmap.prototype);
+                  return bitmap;
+                });
                 const decodeDataUrl = (url) => {
                   const comma = url.indexOf(',');
                   if (comma < 0) throw new TypeError(`invalid data URL: ${url}`);
@@ -980,17 +1090,7 @@ impl JsRuntime {
                     ? decodeDataUrl(request.url)
                     : __hyperthreeReadAsset(request.url);
                   const headers = new Headers({ 'Content-Length': buffer.byteLength });
-                  return {
-                    url: request.url,
-                    status: 200,
-                    statusText: 'OK',
-                    ok: true,
-                    headers,
-                    body: undefined,
-                    arrayBuffer: async () => buffer,
-                    text: async () => new TextDecoder().decode(buffer),
-                    json: async () => JSON.parse(new TextDecoder().decode(buffer)),
-                  };
+                  return new Response(buffer, { url: request.url, headers });
                 });
                 "#,
             ))
@@ -1083,6 +1183,14 @@ impl JsRuntime {
 
     pub fn execute_shutdown(&mut self) -> Result<()> {
         self.execute_lifecycle_callback("onStop")
+    }
+
+    pub fn set_window_size(&mut self, width: u32, height: u32) -> Result<()> {
+        let width = width.max(1);
+        let height = height.max(1);
+        self.execute_source(&format!(
+            "globalThis.window.innerWidth={width}; globalThis.window.innerHeight={height}; globalThis.__hyperthreeNativeCanvas.clientWidth={width}; globalThis.__hyperthreeNativeCanvas.clientHeight={height}; globalThis.dispatchEvent(new Event('resize'));"
+        ))
     }
 
     fn execute_lifecycle_callback(&mut self, callback: &str) -> Result<()> {
@@ -1601,6 +1709,32 @@ fn number_array_arg(args: &[JsValue], index: usize, context: &mut Context) -> Js
     Ok(values)
 }
 
+fn byte_array_value(value: &JsValue, context: &mut Context) -> JsResult<Vec<u8>> {
+    let object = value
+        .to_object(context)
+        .map_err(|_| JsNativeError::typ().with_message("image bytes must be array-like"))?;
+    let length = object
+        .get(js_string!("length"), context)?
+        .to_length(context)
+        .map_err(|_| JsNativeError::typ().with_message("image byte length is invalid"))?;
+    if length > 64 * 1024 * 1024 {
+        return Err(JsNativeError::range()
+            .with_message("image is too large")
+            .into());
+    }
+    let mut bytes = Vec::with_capacity(length as usize);
+    for index in 0..length as usize {
+        let byte = object.get(index, context)?.to_number(context)?;
+        if !byte.is_finite() || !(0.0..=255.0).contains(&byte) || byte.fract() != 0.0 {
+            return Err(JsNativeError::range()
+                .with_message("image byte data is invalid")
+                .into());
+        }
+        bytes.push(byte as u8);
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_three_compatibility_source, JsRuntime};
@@ -2039,6 +2173,7 @@ mod tests {
                 r#"
                 globalThis.__fetchProbe = false;
                 globalThis.__dataFetchProbe = '';
+                globalThis.__imageProbe = false;
                 fetch("Cargo.toml")
                   .then(async (response) => {
                     const buffer = await response.arrayBuffer();
@@ -2049,12 +2184,18 @@ mod tests {
                 fetch(new Request("data:text/plain;base64,SGk="))
                   .then((response) => response.text())
                   .then((result) => { globalThis.__dataFetchProbe = result; });
+                fetch("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+                  .then((response) => response.blob())
+                  .then((blob) => createImageBitmap(blob))
+                  .then((bitmap) => {
+                    globalThis.__imageProbe = bitmap.width === 1 && bitmap.height === 1 && bitmap.data.byteLength === 4;
+                  });
                 "#,
             )
             .unwrap();
         runtime
             .execute_source(
-                "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi') throw new Error('fetch probe failed');",
+                "if (globalThis.__fetchProbe !== true || globalThis.__dataFetchProbe !== 'Hi' || globalThis.__imageProbe !== true) throw new Error('fetch/image probe failed');",
             )
             .unwrap();
     }

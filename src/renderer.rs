@@ -426,8 +426,12 @@ impl Renderer {
             ],
         });
         let (depth_texture, depth_view) = create_depth_resources(&device, &config);
-        let webgpu_context =
-            NativeWebGpuContext::new(device.clone(), queue.clone(), surface.clone());
+        let webgpu_context = NativeWebGpuContext::new(
+            device.clone(),
+            queue.clone(),
+            surface.clone(),
+            config.clone(),
+        );
 
         Ok(Self {
             window,
@@ -466,6 +470,9 @@ impl Renderer {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
+        if let Err(error) = self.webgpu_context.resize_surface(size.width, size.height) {
+            log::warn!("failed to resize WebGPU compatibility surface: {error}");
+        }
         let (depth_texture, depth_view) = create_depth_resources(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;

@@ -10,6 +10,10 @@ camera.lookAt(0, 0, 0);
 globalThis.__gltfSmokeError = null;
 globalThis.__gltfSmokeLoaded = false;
 globalThis.__gltfSmokeRendered = false;
+globalThis.__gltfExternalTexture = false;
+globalThis.__gltfGlbLoaded = false;
+globalThis.__gltfResizeEvent = false;
+window.addEventListener("resize", () => { globalThis.__gltfResizeEvent = window.innerWidth === 960 && window.innerHeight === 540; });
 globalThis.__gltfSmokeStage = "before-adapter";
 
 navigator.gpu.requestAdapter().then(async (adapter) => {
@@ -18,8 +22,15 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   const renderer = new WebGPURenderer({ canvas: globalThis.__hyperthreeNativeCanvas, antialias: false });
   globalThis.__gltfSmokeStage = "before-renderer-init";
   await renderer.init();
+  renderer.setSize(640, 360, false);
+  renderer.setSize(960, 540, false);
   globalThis.__gltfSmokeStage = "before-gltf-load";
-  const gltf = await new GLTFLoader().loadAsync("public/scene.gltf");
+  const loader = new GLTFLoader();
+  const [gltf, externalGltf, glb] = await Promise.all([
+    loader.loadAsync("public/scene.gltf"),
+    loader.loadAsync("public/generated/scene-external.gltf"),
+    loader.loadAsync("public/generated/scene.glb"),
+  ]);
   globalThis.__gltfSmokeStage = "after-gltf-load";
   const skinned = gltf.scene.getObjectByProperty("isSkinnedMesh", true);
   if (!skinned || !skinned.skeleton || skinned.skeleton.bones.length !== 2) {
@@ -29,7 +40,18 @@ navigator.gpu.requestAdapter().then(async (adapter) => {
   mixer.clipAction(gltf.animations[0]).play();
   mixer.update(0.25);
   globalThis.__gltfSmokeLoaded = gltf.scene.children.length === 1 && gltf.animations.length === 1;
+  const textured = externalGltf.scene.getObjectByProperty("isMesh", true);
+  globalThis.__gltfExternalTexture = Boolean(
+    textured?.material?.map?.image?.width === 1 &&
+    textured.material.map.image.height === 1 &&
+    textured.material.map.image.data?.byteLength === 4,
+  );
+  globalThis.__gltfGlbLoaded = glb.scene.children.length === 1 && glb.animations.length === 1;
+  if (!globalThis.__gltfExternalTexture) throw new Error("external glTF image texture did not decode");
+  if (!globalThis.__gltfGlbLoaded) throw new Error("GLB container did not load through GLTFLoader");
   scene.add(gltf.scene);
+  scene.add(externalGltf.scene);
+  scene.add(glb.scene);
   globalThis.__gltfSmokeStage = "before-render";
   await renderer.renderAsync(scene, camera);
   globalThis.__gltfSmokeRendered = device !== null && renderer.isWebGPURenderer === true;
@@ -44,6 +66,9 @@ globalThis.HyperThreeGame = {
   onStart() {
     if (globalThis.__gltfSmokeError) throw new Error(globalThis.__gltfSmokeError.replace(/\n/g, " | "));
     if (!globalThis.__gltfSmokeLoaded) throw new Error("GLTFLoader smoke did not settle");
+    if (!globalThis.__gltfExternalTexture) throw new Error("external texture smoke did not settle");
+    if (!globalThis.__gltfGlbLoaded) throw new Error("GLB smoke did not settle");
+    if (!globalThis.__gltfResizeEvent) throw new Error("native resize event did not settle");
     if (!globalThis.__gltfSmokeRendered) throw new Error("GLTF WebGPU render smoke did not settle");
   },
   onStop() {},
