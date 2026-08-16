@@ -46,6 +46,7 @@
 - [x] WebGPU command encoder clearBuffer/copyBufferToTexture and queue upload offsets/layouts
 - [x] WebGPU device/adapter limits exposure and queue onSubmittedWorkDone synchronization
 - [x] WebGPU storage-buffer ComputePass dispatch and MAP_READ readback fixture
+- [x] WebGPU standard r/rg/rgba, HDR packed, depth/stencil texture format mapping and optional feature negotiation
 - [x] WebGPU texture/sampler destroy, native error-scope, and device-lost lifecycle bindings
 - [x] Device-loss stale-surface guard and native Renderer/JS-session restart smoke
 - [x] WebGPU canvas configure/unconfigure, surface texture lifetime cleanup, and Lost/Outdated native surface reconfiguration

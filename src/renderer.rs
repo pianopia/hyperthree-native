@@ -198,11 +198,18 @@ impl Renderer {
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
         let query_features =
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        let standard_optional_features = wgpu::Features::DEPTH_CLIP_CONTROL
+            | wgpu::Features::DEPTH32FLOAT_STENCIL8
+            | wgpu::Features::INDIRECT_FIRST_INSTANCE
+            | wgpu::Features::RG11B10UFLOAT_RENDERABLE
+            | wgpu::Features::BGRA8UNORM_STORAGE
+            | wgpu::Features::FLOAT32_FILTERABLE;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("hyperthree-device"),
-                    required_features: adapter.features() & (compression_features | query_features),
+                    required_features: adapter.features()
+                        & (compression_features | query_features | standard_optional_features),
                     required_limits: wgpu::Limits::default(),
                 },
                 None,

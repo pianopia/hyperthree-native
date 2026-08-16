@@ -343,6 +343,15 @@ impl NativeWebGpuContext {
 
     fn webgpu_feature_names(&self) -> Vec<&'static str> {
         let mut features = Vec::new();
+        if self.features.contains(wgpu::Features::DEPTH_CLIP_CONTROL) {
+            features.push("depth-clip-control");
+        }
+        if self
+            .features
+            .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
+        {
+            features.push("depth32float-stencil8");
+        }
         if self
             .features
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
@@ -367,6 +376,24 @@ impl NativeWebGpuContext {
                 .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
         {
             features.push("timestamp-query");
+        }
+        if self
+            .features
+            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        {
+            features.push("indirect-first-instance");
+        }
+        if self
+            .features
+            .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+        {
+            features.push("rg11b10ufloat-renderable");
+        }
+        if self.features.contains(wgpu::Features::BGRA8UNORM_STORAGE) {
+            features.push("bgra8unorm-storage");
+        }
+        if self.features.contains(wgpu::Features::FLOAT32_FILTERABLE) {
+            features.push("float32-filterable");
         }
         features
     }
@@ -4027,6 +4054,21 @@ fn texture_usage(bits: u64) -> wgpu::TextureUsages {
 
 fn texture_format(format: &str) -> wgpu::TextureFormat {
     match format {
+        "r8unorm" => wgpu::TextureFormat::R8Unorm,
+        "r8snorm" => wgpu::TextureFormat::R8Snorm,
+        "r8uint" => wgpu::TextureFormat::R8Uint,
+        "r8sint" => wgpu::TextureFormat::R8Sint,
+        "r16uint" => wgpu::TextureFormat::R16Uint,
+        "r16sint" => wgpu::TextureFormat::R16Sint,
+        "r16float" => wgpu::TextureFormat::R16Float,
+        "rg8unorm" => wgpu::TextureFormat::Rg8Unorm,
+        "rg8snorm" => wgpu::TextureFormat::Rg8Snorm,
+        "rg8uint" => wgpu::TextureFormat::Rg8Uint,
+        "rg8sint" => wgpu::TextureFormat::Rg8Sint,
+        "rg16uint" => wgpu::TextureFormat::Rg16Uint,
+        "rg16sint" => wgpu::TextureFormat::Rg16Sint,
+        "rg16float" => wgpu::TextureFormat::Rg16Float,
+        "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
         "bgra8unorm" => wgpu::TextureFormat::Bgra8Unorm,
         "bgra8unorm-srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
         "rgba8unorm-srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -4035,13 +4077,28 @@ fn texture_format(format: &str) -> wgpu::TextureFormat {
         "rgba8sint" => wgpu::TextureFormat::Rgba8Sint,
         "rgba16uint" => wgpu::TextureFormat::Rgba16Uint,
         "rgba16sint" => wgpu::TextureFormat::Rgba16Sint,
+        "rgba16unorm" => wgpu::TextureFormat::Rgba16Unorm,
+        "rgba16snorm" => wgpu::TextureFormat::Rgba16Snorm,
         "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        "rg32uint" => wgpu::TextureFormat::Rg32Uint,
+        "rg32sint" => wgpu::TextureFormat::Rg32Sint,
+        "rg32float" => wgpu::TextureFormat::Rg32Float,
+        "rgba32uint" => wgpu::TextureFormat::Rgba32Uint,
+        "rgba32sint" => wgpu::TextureFormat::Rgba32Sint,
+        "rgba32float" => wgpu::TextureFormat::Rgba32Float,
+        "rgb9e5ufloat" => wgpu::TextureFormat::Rgb9e5Ufloat,
+        "rgb10a2uint" => wgpu::TextureFormat::Rgb10a2Uint,
+        "rgb10a2unorm" => wgpu::TextureFormat::Rgb10a2Unorm,
+        "rg11b10ufloat" => wgpu::TextureFormat::Rg11b10Float,
         "r32float" => wgpu::TextureFormat::R32Float,
         "r32uint" => wgpu::TextureFormat::R32Uint,
         "r32sint" => wgpu::TextureFormat::R32Sint,
         "depth24plus" => wgpu::TextureFormat::Depth24Plus,
         "depth24plus-stencil8" => wgpu::TextureFormat::Depth24PlusStencil8,
         "depth32float" => wgpu::TextureFormat::Depth32Float,
+        "depth32float-stencil8" => wgpu::TextureFormat::Depth32FloatStencil8,
+        "depth16unorm" => wgpu::TextureFormat::Depth16Unorm,
+        "stencil8" => wgpu::TextureFormat::Stencil8,
         "bc1-rgba-unorm" => wgpu::TextureFormat::Bc1RgbaUnorm,
         "bc1-rgba-unorm-srgb" => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
         "bc2-rgba-unorm" => wgpu::TextureFormat::Bc2RgbaUnorm,
@@ -4680,6 +4737,22 @@ mod tests {
                 block: wgpu::AstcBlock::B4x4,
                 channel: wgpu::AstcChannel::UnormSrgb,
             }
+        );
+    }
+
+    #[test]
+    fn maps_standard_hdr_and_depth_texture_formats_to_native_formats() {
+        assert_eq!(
+            texture_format("rgba32float"),
+            wgpu::TextureFormat::Rgba32Float
+        );
+        assert_eq!(
+            texture_format("rg11b10ufloat"),
+            wgpu::TextureFormat::Rg11b10Float
+        );
+        assert_eq!(
+            texture_format("depth32float-stencil8"),
+            wgpu::TextureFormat::Depth32FloatStencil8
         );
     }
 }
